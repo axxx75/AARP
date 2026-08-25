@@ -244,7 +244,7 @@ fi
 
 run_agent() {
     TERM=dumb openclaude --print --dangerously-skip-permissions \
-        --add-dir "$AARP_DIR" \
+    --add-dir "$AARP_DIR" \
         --add-dir "$REVIEW_DIR" \
         "$@"
 }
