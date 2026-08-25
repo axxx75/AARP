@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Colori per il terminale
+# ------------------------------------------------------------------------------
+# COLORS
+# ------------------------------------------------------------------------------
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
@@ -245,8 +247,8 @@ fi
 run_agent() {
     TERM=dumb openclaude --print --dangerously-skip-permissions \
     --add-dir "$AARP_DIR" \
-        --add-dir "$REVIEW_DIR" \
-        "$@"
+    --add-dir "$REVIEW_DIR" \
+    "$@"
 }
 
 LOGS_DIR="${REVIEW_DIR}/logs"
@@ -305,11 +307,12 @@ export CLAUDE_CODE_DISABLE_BANNER=1
 #MODEL_GENERAL="${MODEL_GENERAL:-anthropic/claude-3.5-sonnet}"
 #MODEL_REASONING="${MODEL_REASONING:-deepseek/deepseek-r1}"
 
-#MODEL_GENERAL="${MODEL_GENERAL:-thinkingmachines/inkling:free}"
-#MODEL_REASONING="${MODEL_REASONING:-cohere/north-mini-code:free}"
+MODEL_GENERAL="${MODEL_GENERAL:-thinkingmachines/inkling:free}" 	# FreeModel but with limit
+MODEL_REASONING="${MODEL_REASONING:-cohere/north-mini-code:free}"	# FreeModel but with limit 
 
-MODEL_GENERAL="${MODEL_GENERAL:-google/gemini-2.5-flash}"
-MODEL_REASONING="${MODEL_REASONING:-google/gemini-2.5-flash}"
+#MODEL_GENERAL="${MODEL_GENERAL:-google/gemini-2.5-flash}"
+#MODEL_REASONING="${MODEL_REASONING:-google/gemini-2.5-flash}"
+
 # ------------------------------------------------------------------------------
 # -START AARP PIPELINE
 # ------------------------------------------------------------------------------
