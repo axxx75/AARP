@@ -17,12 +17,13 @@ REVIEW_DIR_OVERRIDE=""
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--review-dir PATH]
+Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--branch BRANCH_NAME] [--review-dir PATH]
 
 Review a local checkout or clone a Git repository without copying AARP into it.
 
 Options:
   --target PATH_OR_GIT_URL  Local checkout or Git URL to review.
+  --branch BRANCH_NAME      Target base branch for remediation (e.g. main, release/v2.0.0).
   --review-dir PATH         Directory for the clone, reports, and logs.
   -h, --help                Show this help.
 
@@ -40,6 +41,15 @@ while (($# > 0)); do
                 exit 2
             fi
             TARGET_SPEC="$2"
+            shift 2
+            ;;
+        --branch|--base-branch|--main-branch)
+            if (($# < 2)); then
+                echo "Missing value for $1." >&2
+                usage >&2
+                exit 2
+            fi
+            TARGET_BRANCH_OVERRIDE="$2"
             shift 2
             ;;
         --review-dir)
@@ -480,8 +490,10 @@ fi
 # ------------------------------------------------------------------------------
 echo -e "\n${YELLOW}[FASE 4/4] Ciclo Interattivo Remediation...${NC}"
 
-MAIN_BRANCH="release/v2.0.0"
 source "${AARP_DIR}/scripts/roadmap_helpers.sh"
+MAIN_BRANCH="$(roadmap_detect_base_branch "$TARGET_DIR" "$ROADMAP_REPORT")"
+echo -e "${CYAN}Target base branch identificato: ${GREEN}${MAIN_BRANCH}${NC}"
+
 TARGET_PREPARED=false
 SKIPPED_TASK_IDS=()
 

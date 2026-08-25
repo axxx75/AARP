@@ -130,6 +130,67 @@ roadmap_task_branch_prefix() {
     esac
 }
 
+roadmap_detect_base_branch() {
+    local target_repo="${1:-.}"
+    local roadmap_file="${2:-}"
+
+    # 1. Override esplicito da variabile d'ambiente
+    if [[ -n "${TARGET_BRANCH_OVERRIDE:-}" ]]; then
+        printf '%s\n' "$TARGET_BRANCH_OVERRIDE"
+        return 0
+    fi
+    if [[ -n "${TARGET_BASE_BRANCH:-}" ]]; then
+        printf '%s\n' "$TARGET_BASE_BRANCH"
+        return 0
+    fi
+    if [[ -n "${MAIN_BRANCH:-}" && "$MAIN_BRANCH" != "release/v2.0.0" ]]; then
+        printf '%s\n' "$MAIN_BRANCH"
+        return 0
+    fi
+
+    # 2. Estrazione da '# Target Release:' in ROADMAP.md
+    if [[ -n "$roadmap_file" && -f "$roadmap_file" ]]; then
+        local roadmap_target
+        roadmap_target="$(sed -n 's/^#[[:space:]]*Target Release:[[:space:]]*//p' "$roadmap_file" | tr -d '\r' | head -n 1)"
+        if [[ -n "$roadmap_target" && "$roadmap_target" != *"<"* && "$roadmap_target" != *"TBD"* ]]; then
+            if git -C "$target_repo" rev-parse --verify "$roadmap_target" >/dev/null 2>&1 || \
+               git -C "$target_repo" rev-parse --verify "origin/$roadmap_target" >/dev/null 2>&1; then
+                printf '%s\n' "$roadmap_target"
+                return 0
+            fi
+        fi
+    fi
+
+    # 3. Branch correntemente attivo nel repository target
+    local current_git_branch
+    current_git_branch="$(git -C "$target_repo" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -n "$current_git_branch" && "$current_git_branch" != "HEAD" ]]; then
+        printf '%s\n' "$current_git_branch"
+        return 0
+    fi
+
+    # 4. Default branch remoto (origin/HEAD)
+    local default_remote_branch
+    default_remote_branch="$(git -C "$target_repo" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)"
+    if [[ -n "$default_remote_branch" ]]; then
+        printf '%s\n' "$default_remote_branch"
+        return 0
+    fi
+
+    # 5. Fallback convenzionali se presenti nel repo
+    local candidate
+    for candidate in main master develop; do
+        if git -C "$target_repo" rev-parse --verify "$candidate" >/dev/null 2>&1 || \
+           git -C "$target_repo" rev-parse --verify "origin/$candidate" >/dev/null 2>&1; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    # Fallback predefinito
+    printf 'main\n'
+}
+
 mark_roadmap_task_merged() {
     local task_id="$1"
     local temp_path="${ROADMAP_REPORT}.tmp.$$"
