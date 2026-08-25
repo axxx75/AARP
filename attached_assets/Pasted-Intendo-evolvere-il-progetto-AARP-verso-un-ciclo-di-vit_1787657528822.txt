@@ -1,0 +1,44 @@
+Intendo evolvere il progetto AARP verso un ciclo di vita agentico completo (End-to-End Software Lifecycle).
+
+Nel lifecycle manca un agente che possa produrre documentazione esaustiva di tutto il repo per creare degli file md da tenere a corredo del repo/folder dell app analizzata. E' diverso dal PROJECT_CONTEXT, qualcosa di più completo, classica doc di prodotto, admin guide., user guide e rapida guida step by step di installazione.
+Inoltre immaginando di voler implementare una nuova funzione o app intera, vorrei affrontarla in maniera agentica. da idea a doc tecnica di progetto che gli sviluppatori attueranno per produrre la modifica al codice per implementare la nuova funzionalità, o crei l'app/sito se nn esisteva. 
+
+Questo per colmare lacune fondamentali del paradigma attuale: la documentazione statica/operativa di prodotto e la fase di concezione/design (Design Phase).
+
+1. L'Agente "Documentation Architect" (Reverse Engineering & Product Doc)
+distinguiamo rispetto a PROJECT_CONTEXT:
+	• PROJECT_CONTEXT / RAG Context: Serve all'LLM per orientarsi nel codice (è denso, token-optimized, funzionale all'elaborazione automatica).
+	• Product & Admin Documentation: Serve agli umani (dev, sysadmin, product manager). Deve essere leggibile, ben organizzata in Markdown ed esaustiva.
+	
+Come potrebbe funzionare questo modulo:
+Un agente dedicato che scansiona l'intero repository ed emette una struttura organizzata in una cartella /docs:
+	• ARCHITECTURE.md: Diagrammi dei componenti, flussi dei dati (es. sequenza tra agenti), integrazioni esterne.
+	• ADMIN_GUIDE.md: Prerequisiti di sistema, variabili d'ambiente (.env), setup dei modelli (Ollama, OpenAI, ecc.), gestione dei log, procedure di backup/disaster recovery.
+	• USER_GUIDE.md / API_REF.md: Manuale operativo, descrizione degli endpoint/CLI e guide "How-To".
+	Il valore reale: Risolve il problema del Document Drift all'origine. Ogni volta che si lancia la pipeline AARP, la documentazione di prodotto viene rigenerata o aggiornata in automatico via PR.
+	
+
+
+Questa fase potremmo richiamarla allo start, guarderemo se nel repo/folder esiste già una cartella doc/documents e se nn esiste chiederemo conferma se la si vuole creare con questo nuovo agente. (scriviamo anche relativo prompt)
+Inolte dopo ogni codereview, aggiorniamo anche la doc con eventuali riferimenti modificati.
+Aggiungo che un flag specifico (--only-doc) poterbbe essere utile per eseguire solo questo "agente documentale" per capiere cosa contiene un repo/folder e come funziona in manera semplice e senza analizzarlo personalmente
+	
+2. Il modulo "Feature & App Builder Agentic Pipeline" (Dall'Idea al Codice)
+Questo passo trasforma AARP da uno strumento di Audit & Planning a un vero e proprio Framework di Spec-Driven Development.
+Invece di partire subito a generare codice, la pipeline ricalca il flusso di un team di sviluppo tradizionale:
+[Idea / Requisito Grezzo]       │       ▼┌─────────────────────────────────────────┐│ 1. Product Owner Agent                   │ ➔ Genera PRD (Product Requirement Doc)└─────────────────────────────────────────┘       │       ▼┌─────────────────────────────────────────┐│ 2. Solution Architect Agent              │ ➔ Genera Technical Spec, DB Schema, API Contract└─────────────────────────────────────────┘       │       ▼┌─────────────────────────────────────────┐│ 3. Task Decomposition Agent             │ ➔ Spacca la Spec in Prompt/Task atomici per i Dev└─────────────────────────────────────────┘       │       ▼┌─────────────────────────────────────────┐│ 4. Implementation Agent (Dev/Coder)      │ ➔ Scrive il codice e i relativi Test└─────────────────────────────────────────┘
+Perché questo approccio funziona meglio:
+	1. Zero Hallucination sull'architettura: Il Dev Agent non "inventa" dove mettere le cose, ma segue fedelmente la Doc Tecnica di Progetto creata dall'Architect Agent.
+	2. Review intermedia: L'utente o il Tech Lead può fermare il processo dopo il punto 2 per revisionare la documentazione architetturale prima che venga scritta anche solo una riga di codice.
+	3. Generazione di App da Zero o Feature: Funziona in modo speculare se il repo è vuoto (scaffolding di un nuovo progetto) o se esiste già (iniezione di un nuovo modulo rispettando i pattern esistenti).
+	
+Come potrebbe evolvere la struttura concettuale di AARP
+Se oggi AARP si concentra su:
+Audit⟶Roadmap
+Con queste evoluzioni la visione diventa:
+Ideation⟶Spec/Design⟶Code Execution⟶Audit⟶Living Doc
+Questo posizionerebbe AARP non solo come uno strumento di analisi, ma come un Enterprise Agentic SDLC Framework completo.
+
+Suddividiamo in 2 le modifiche, iniziamo dall'agente documentale.
+Prepara quanto serve (prompt eventuali modiche al system e studiamo bene i flag di avvio dell'orchestratore per gestirlo anche separatamente come unico task, oltre che integrato come ti dicevo. Consigliamio anche l'llm piuù adatto a questo scopo, e dammi un nome che potremmo dare a questo agente
+il secondo task sarà Feature & App Builder Agentic Pipeline
