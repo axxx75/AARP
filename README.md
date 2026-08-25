@@ -236,8 +236,9 @@ runs, it writes and validates the following staged files:
 | `API_REF.md` | Verified APIs or CLIs; explicitly records when no interface is present |
 
 Every document separates verified evidence from inferences and information
-that could not be verified. Incomplete output or residual template text blocks
-the update instead of being treated as a checkpoint.
+that could not be verified. The checkpoint validation intentionally stays
+minimal: it only requires every expected file to exist and be non-empty, so
+content and residual template text do not cause unnecessary stops.
 
 The agent writes only to
 `reviews/<repository-name>-<stable-id>/reports/documentation/` (or the

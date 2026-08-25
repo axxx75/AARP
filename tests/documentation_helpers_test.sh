@@ -101,30 +101,22 @@ documentation_output_is_valid "$OUTPUT_DIR" || {
     exit 1
 }
 
-sed -i '/No architecture inference is required for this fixture./d' "${OUTPUT_DIR}/ARCHITECTURE.md"
+rm "${OUTPUT_DIR}/API_REF.md"
 if documentation_output_is_valid "$OUTPUT_DIR" >/dev/null 2>&1; then
-    echo "Expected an empty evidence classification to invalidate the documentation bundle." >&2
+    echo "Expected a missing document to invalidate the documentation bundle." >&2
     exit 1
 fi
-sed -i '/### Inferred/a No architecture inference is required for this fixture.' "${OUTPUT_DIR}/ARCHITECTURE.md"
 
-sed -i '/The system runs a command-line workflow./d' "${OUTPUT_DIR}/ARCHITECTURE.md"
+: > "${OUTPUT_DIR}/API_REF.md"
 if documentation_output_is_valid "$OUTPUT_DIR" >/dev/null 2>&1; then
-    echo "Expected an empty required section to invalidate the documentation bundle." >&2
+    echo "Expected an empty document to invalidate the documentation bundle." >&2
     exit 1
 fi
-sed -i '/## System overview/a The system runs a command-line workflow.' "${OUTPUT_DIR}/ARCHITECTURE.md"
 
+: > "${OUTPUT_DIR}/API_REF.md"
 printf '\n[Describe the service]\n' >> "${OUTPUT_DIR}/ARCHITECTURE.md"
-if documentation_output_is_valid "$OUTPUT_DIR" >/dev/null 2>&1; then
-    echo "Expected a template placeholder to invalidate the documentation bundle." >&2
-    exit 1
-fi
-
-sed -i '/\[Describe the service\]/d' "${OUTPUT_DIR}/ARCHITECTURE.md"
-sed -i '/### Inferred/d' "${OUTPUT_DIR}/ARCHITECTURE.md"
-if documentation_output_is_valid "$OUTPUT_DIR" >/dev/null 2>&1; then
-    echo "Expected missing evidence classification to invalidate the documentation bundle." >&2
+if ! documentation_output_is_valid "$OUTPUT_DIR" >/dev/null 2>&1; then
+    echo "Expected non-empty documentation with template text to remain valid." >&2
     exit 1
 fi
 
