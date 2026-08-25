@@ -258,10 +258,12 @@ run_agent() {
 }
 
 run_documentation_agent() {
+    local documentation_log="${LOGS_DIR}/documentation-agent.log"
+
     AARP_DOCUMENTATION_OUTPUT_DIR="$DOCUMENTATION_OUTPUT_DIR" TERM=dumb openclaude --print \
     --add-dir "$AUDIT_DIR" \
     --add-dir "$DOCUMENTATION_OUTPUT_DIR" \
-    "$@"
+    "$@" 2>&1 | tee -a "$documentation_log"
 }
 
 LOGS_DIR="${REVIEW_DIR}/logs"
@@ -407,16 +409,32 @@ prepare_documentation_branch() {
 }
 
 generate_documentation_bundle() {
+    local missing_document
+
     if documentation_output_is_valid "$DOCUMENTATION_OUTPUT_DIR"; then
         echo -e "${GREEN}✓ [SKIP] Bundle documentale già valido. Ripresa dallo stato salvato.${NC}"
     else
         rm -rf "$DOCUMENTATION_OUTPUT_DIR"
         mkdir -p "$DOCUMENTATION_OUTPUT_DIR"
         echo -e "${CYAN}--> Avvio Documentation Architect Agent (${MODEL_DOCUMENTATION})...${NC}"
-        echo "Agisci come Documentation Architect Agent. Analizza l'intero snapshot ${AUDIT_DIR}. La documentazione esistente rilevata è: ${DOCUMENTATION_SOURCE_DIR:-nessuna}. Leggi il prompt ${DOCUMENTATION_PROMPT} e il contratto ${DOCUMENTATION_TEMPLATE}. Genera esclusivamente ARCHITECTURE.md, ADMIN_GUIDE.md, USER_GUIDE.md e API_REF.md nella directory di staging ${DOCUMENTATION_OUTPUT_DIR}. Non modificare lo snapshot, il repository target o il framework AARP. Distingui sempre fatti verificati, inferenze e informazioni non verificabili." | \
-            run_documentation_agent --model "$MODEL_DOCUMENTATION" --file "$DOCUMENTATION_PROMPT" --file "$DOCUMENTATION_TEMPLATE"
+        if ! echo "Agisci come Documentation Architect Agent. Analizza l'intero snapshot ${AUDIT_DIR}. La documentazione esistente rilevata è: ${DOCUMENTATION_SOURCE_DIR:-nessuna}. Leggi il prompt ${DOCUMENTATION_PROMPT} e il contratto ${DOCUMENTATION_TEMPLATE}. Crea ARCHITECTURE.md, ADMIN_GUIDE.md, USER_GUIDE.md e API_REF.md nella directory di staging ${DOCUMENTATION_OUTPUT_DIR}. Non limitarti a descrivere le azioni: completa tutte le scritture prima di terminare. Non modificare lo snapshot, il repository target o il framework AARP. Distingui sempre fatti verificati, inferenze e informazioni non verificabili." | \
+            run_documentation_agent --model "$MODEL_DOCUMENTATION" --file "$DOCUMENTATION_PROMPT" --file "$DOCUMENTATION_TEMPLATE"; then
+            echo -e "${RED}Documentation Architect Agent terminato con errore; consulta ${LOGS_DIR}/documentation-agent.log.${NC}" >&2
+            return 1
+        fi
+
+        while IFS= read -r missing_document; do
+            [[ -n "$missing_document" ]] || continue
+            echo -e "${YELLOW}--> Documento mancante: ${missing_document}. Avvio completamento mirato...${NC}"
+            if ! echo "Il primo passaggio ha terminato senza creare ${missing_document}. Genera adesso soltanto ${missing_document} nella directory ${DOCUMENTATION_OUTPUT_DIR}. Non modificare i documenti già presenti e non limitarti a descrivere l'azione: scrivi il file prima di terminare." | \
+                run_documentation_agent --model "$MODEL_DOCUMENTATION" --file "$DOCUMENTATION_PROMPT" --file "$DOCUMENTATION_TEMPLATE"; then
+                echo -e "${RED}Completamento di ${missing_document} fallito; consulta ${LOGS_DIR}/documentation-agent.log.${NC}" >&2
+                return 1
+            fi
+        done < <(documentation_missing_outputs "$DOCUMENTATION_OUTPUT_DIR")
+
         documentation_output_is_valid "$DOCUMENTATION_OUTPUT_DIR" || {
-            echo -e "${RED}Bundle documentale incompleto o con residui di template: aggiornamento bloccato.${NC}" >&2
+            echo -e "${RED}Bundle documentale incompleto: aggiornamento bloccato. Consulta ${LOGS_DIR}/documentation-agent.log.${NC}" >&2
             return 1
         }
         echo -e "${GREEN}✓ Bundle documentale validato in ${DOCUMENTATION_OUTPUT_DIR}.${NC}"

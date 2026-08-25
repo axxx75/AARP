@@ -15,8 +15,7 @@ find_documentation_dir() {
     return 1
 }
 
-
-documentation_output_is_valid() {
+documentation_missing_outputs() {
     local documentation_dir="$1"
     local document_name
     local -a required_documents=(
@@ -27,10 +26,18 @@ documentation_output_is_valid() {
     )
 
     for document_name in "${required_documents[@]}"; do
-        document_path="${documentation_dir}/${document_name}"
-        if [[ ! -f "$document_path" || ! -s "$document_path" ]]; then
-            echo "Documentation output is missing or empty: ${document_name}" >&2
-            return 1
+        if [[ ! -f "${documentation_dir}/${document_name}" || ! -s "${documentation_dir}/${document_name}" ]]; then
+            printf '%s\n' "$document_name"
         fi
     done
+}
+
+documentation_output_is_valid() {
+    local documentation_dir="$1"
+    local document_name
+
+    while IFS= read -r document_name; do
+        echo "Documentation output is missing or empty: ${document_name}" >&2
+        return 1
+    done < <(documentation_missing_outputs "$documentation_dir")
 }

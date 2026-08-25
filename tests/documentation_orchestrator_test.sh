@@ -81,6 +81,11 @@ Inspect the generated logs after failures.
 The fixture has no support policy.
 DOC
 
+if [[ "${FAKE_DOCUMENTATION_MODE:-valid}" == "missing-api-first" ]] &&
+    [[ "$(wc -l < "$FAKE_OPENCLAUDE_LOG")" -eq 1 ]]; then
+    exit 0
+fi
+
 cat > "${AARP_DOCUMENTATION_OUTPUT_DIR}/API_REF.md" <<'DOC'
 # API Reference
 ## Evidence classification
@@ -166,6 +171,21 @@ if run_only_doc "$INVALID_TARGET" "${TEMP_DIR}/invalid-review" "s\n" "invalid"; 
 fi
 [[ ! -e "${INVALID_TARGET}/docs" ]] || {
     echo "Invalid documentation output changed the target." >&2
+    exit 1
+}
+
+# A partial first response is resumed for each missing document.
+RESUMED_TARGET="${TEMP_DIR}/resumed-target"
+RESUMED_REVIEW="${TEMP_DIR}/resumed-review"
+create_target "$RESUMED_TARGET"
+rm -f "$FAKE_LOG"
+run_only_doc "$RESUMED_TARGET" "$RESUMED_REVIEW" "s\nn\n" "missing-api-first"
+[[ -s "${RESUMED_REVIEW}/reports/documentation/API_REF.md" ]] || {
+    echo "Expected a retry to create the missing API reference." >&2
+    exit 1
+}
+[[ "$(wc -l < "$FAKE_LOG")" -eq 2 ]] || {
+    echo "Expected exactly one targeted documentation retry." >&2
     exit 1
 }
 
