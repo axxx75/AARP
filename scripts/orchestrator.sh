@@ -572,7 +572,7 @@ while true; do
     # La roadmap viene aggiornata deterministicamente dall'orchestratore dopo
     # il merge; l'agente deve limitarsi alla remediation e al commit.
     if ! echo "Leggi ${ROADMAP_REPORT}. Esegui esclusivamente il task ${TASK_ID} (${TASK_PRIORITY}) appena confermato. Crea il branch ${TASK_BRANCH_PREFIX}<task-name> corrispondente nel repository target, applica la fix o implementa il cambiamento richiesto e fai il git commit. Non modificare ${ROADMAP_REPORT} e non modificare file del framework AARP." | \
-        openclaude --print --dangerously-skip-permissions --model "$MODEL_GENERAL" --add-dir "$AARP_DIR" --add-dir "$REVIEW_DIR"; then
+        openclaude --print --dangerously-skip-permissions --model "$MODEL_GENERAL" --file "$CONTEXT_REPORT" --file "$ROADMAP_REPORT" --add-dir "$AARP_DIR" --add-dir "$REVIEW_DIR"; then
         cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
         rm -f "$ROADMAP_BACKUP"
         echo -e "${RED}Errore durante la remediation di ${TASK_ID}; ROADMAP.md ripristinata.${NC}" >&2
