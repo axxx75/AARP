@@ -260,7 +260,7 @@ run_agent() {
 run_documentation_agent() {
     local documentation_log="${LOGS_DIR}/documentation-agent.log"
 
-    AARP_DOCUMENTATION_OUTPUT_DIR="$DOCUMENTATION_OUTPUT_DIR" TERM=dumb openclaude --print \
+    AARP_DOCUMENTATION_OUTPUT_DIR="$DOCUMENTATION_OUTPUT_DIR" TERM=dumb openclaude --print --dangerously-skip-permissions \
     --add-dir "$AUDIT_DIR" \
     --add-dir "$DOCUMENTATION_OUTPUT_DIR" \
     "$@" 2>&1 | tee -a "$documentation_log"
