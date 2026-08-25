@@ -133,4 +133,20 @@ fallback_preview="$(roadmap_next_task_preview)"
     exit 1
 }
 
+# Test roadmap_detect_base_branch
+detected_branch="$(roadmap_detect_base_branch "$PROJECT_DIR" "$ROADMAP_REPORT")"
+[[ "$detected_branch" == "release/v2.0.0" ]] || [[ "$detected_branch" == "visualstudio" ]] || [[ "$detected_branch" == "main" ]] || {
+    echo "Expected valid detected base branch, got: ${detected_branch}" >&2
+    exit 1
+}
+
+# Test override via TARGET_BRANCH_OVERRIDE
+TARGET_BRANCH_OVERRIDE="custom-branch"
+override_branch="$(roadmap_detect_base_branch "$PROJECT_DIR" "$ROADMAP_REPORT")"
+[[ "$override_branch" == "custom-branch" ]] || {
+    echo "Expected custom-branch, got: ${override_branch}" >&2
+    exit 1
+}
+unset TARGET_BRANCH_OVERRIDE
+
 echo "Roadmap helper fixtures passed."

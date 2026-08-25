@@ -17,12 +17,13 @@ REVIEW_DIR_OVERRIDE=""
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--review-dir PATH]
+Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--branch BRANCH_NAME] [--review-dir PATH]
 
 Review a local checkout or clone a Git repository without copying AARP into it.
 
 Options:
   --target PATH_OR_GIT_URL  Local checkout or Git URL to review.
+  --branch BRANCH_NAME      Target base branch for remediation (e.g. main, release/v2.0.0).
   --review-dir PATH         Directory for the clone, reports, and logs.
   -h, --help                Show this help.
 
@@ -40,6 +41,15 @@ while (($# > 0)); do
                 exit 2
             fi
             TARGET_SPEC="$2"
+            shift 2
+            ;;
+        --branch|--base-branch|--main-branch)
+            if (($# < 2)); then
+                echo "Missing value for $1." >&2
+                usage >&2
+                exit 2
+            fi
+            TARGET_BRANCH_OVERRIDE="$2"
             shift 2
             ;;
         --review-dir)
@@ -232,6 +242,13 @@ else
     fi
 fi
 
+run_agent() {
+    TERM=dumb openclaude --print --dangerously-skip-permissions \
+    --add-dir "$AARP_DIR" \
+        --add-dir "$REVIEW_DIR" \
+        "$@"
+}
+
 LOGS_DIR="${REVIEW_DIR}/logs"
 mkdir -p "$REPORTS_DIR" "$LOGS_DIR"
 
@@ -341,13 +358,8 @@ if validate_report "$CONTEXT_REPORT" "PROJECT_CONTEXT.md" "$CONTEXT_TEMPLATE" \
     echo -e "${GREEN}✓ [SKIP] PROJECT_CONTEXT.md già presente. Ripresa dallo stato salvato.${NC}"
 else
     echo -e "${CYAN}--> Spawning Architect Agent (${MODEL_GENERAL})...${NC}"
-
-        echo "Esamina l'intera alberatura dello snapshot del repository target, i file di configurazione e la struttura. Leggi il template allegato ${CONTEXT_TEMPLATE}, usalo come struttura obbligatoria, sostituisci tutti i placeholder con informazioni verificate e genera il report completo in ${CONTEXT_REPORT}. Non creare o modificare file del framework AARP o del repository target. Se esiste già un report incompleto, sovrascrivilo con il report completo." | \
-        openclaude --print --dangerously-skip-permissions --model "$MODEL_GENERAL" \
-            --file "${PROMPTS_DIR}/mapping.md" \
-            --file "$CONTEXT_TEMPLATE" \
-	    --add-dir "$AARP_DIR" --add-dir "$REVIEW_DIR"
-
+    echo "Esamina l'intera alberatura dello snapshot del repository target, i file di configurazione e la struttura. Leggi il template allegato ${CONTEXT_TEMPLATE}, usalo come struttura obbligatoria, sostituisci tutti i placeholder con informazioni verificate e genera il report completo in ${CONTEXT_REPORT}. Non creare o modificare file del framework AARP o del repository target. Se esiste già un report incompleto, sovrascrivilo con il report completo." | \
+    run_agent --model "$MODEL_GENERAL" --file "${PROMPTS_DIR}/mapping.md" --file "$CONTEXT_TEMPLATE"
     validate_report "$CONTEXT_REPORT" "PROJECT_CONTEXT.md" "$CONTEXT_TEMPLATE" \
         "# Project Context & Architectural Blueprint" \
         "## 1. Tech Stack & Core Services" \
@@ -373,10 +385,7 @@ else
     echo -e "${CYAN}--> Launching UX/UI Agent (${MODEL_GENERAL})...${NC}"
     (
         echo "Leggi ${CONTEXT_REPORT} e i componenti UI dello snapshot del repository target. Leggi il template allegato ${UX_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e salva il report completo in ${UX_REPORT}. Non creare o modificare file del framework AARP o del repository target." | \
-        openclaude --print --dangerously-skip-permissions --model "$MODEL_GENERAL" \
-            --file "${PROMPTS_DIR}/ux-ui.md" \
-            --file "$UX_TEMPLATE" \
-	    --add-dir "$AARP_DIR" --add-dir "$REVIEW_DIR"
+        run_agent --model "$MODEL_GENERAL" --file "${PROMPTS_DIR}/ux-ui.md" --file "$UX_TEMPLATE"
         validate_report "$UX_REPORT" "AUDIT_UX_UI.md" "$UX_TEMPLATE" \
             "# UX/UI & Front-End Performance Audit Report:" \
             "## Executive UX & Performance Summary" \
@@ -397,10 +406,7 @@ else
     echo -e "${CYAN}--> Launching Security Agent (${MODEL_REASONING})...${NC}"
     (
         echo "Leggi ${CONTEXT_REPORT} e le rotte/controller backend dello snapshot del repository target. Leggi il template AppSec allegato ${SECURITY_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e salva il report completo in ${SECURITY_REPORT}. Non creare o modificare file del framework AARP o del repository target." | \
-        openclaude --print --dangerously-skip-permissions --model "$MODEL_REASONING" \
-            --file "${PROMPTS_DIR}/security.md" \
-            --file "$SECURITY_TEMPLATE" \
-	    --add-dir "$AARP_DIR" --add-dir "$REVIEW_DIR"
+        run_agent --model "$MODEL_REASONING" --file "${PROMPTS_DIR}/security.md" --file "$SECURITY_TEMPLATE"
         validate_report "$SECURITY_REPORT" "AUDIT_SECURITY.md" "$SECURITY_TEMPLATE" \
             "# AppSec Audit Report:" \
             "## Executive Security Summary" \
@@ -421,10 +427,7 @@ else
     echo -e "${CYAN}--> Launching DB Agent (${MODEL_REASONING})...${NC}"
     (
         echo "Leggi ${CONTEXT_REPORT} e gli schemi DB dello snapshot del repository target. Leggi il template allegato ${DATABASE_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e salva il report completo in ${DATABASE_REPORT}. Non limitarti a descrivere un report esistente: aggiorna direttamente il file. Se trovi finding DB, calcola la tabella Executive dai finding dettagliati: ogni riga P0/P1/P2 deve riportare i conteggi per categoria e il totale, e la somma dei totali deve coincidere con il numero di finding. Mantieni tutti zero solo se non esistono finding e spiega esplicitamente il perimetro senza database. Non creare o modificare file del framework AARP o del repository target." | \
-        openclaude --print --dangerously-skip-permissions --model "$MODEL_REASONING" \
-            --file "${PROMPTS_DIR}/db-specialist.md" \
-            --file "$DATABASE_TEMPLATE" \
-	    --add-dir "$AARP_DIR" --add-dir "$REVIEW_DIR"
+        run_agent --model "$MODEL_REASONING" --file "${PROMPTS_DIR}/db-specialist.md" --file "$DATABASE_TEMPLATE"
         validate_report "$DATABASE_REPORT" "AUDIT_DB.md" "$DATABASE_TEMPLATE" \
             "# Database & Storage Audit Report:" \
             "## Executive Database Summary" \
@@ -441,14 +444,12 @@ if [ ${#pids[@]} -gt 0 ]; then
         wait "$pid" || { echo -e "${RED}Errore durante l'esecuzione dell'agente PID $pid. Controlla i log in ${LOGS_DIR}${NC}"; exit 1; }
     done
 fi
-
 echo -e "\n${YELLOW}[FASE 2] Completata: Tutti i report di settore sono stati generati.${NC}"
 
 # ------------------------------------------------------------------------------
 # FASE 3: Sintesi e Backlog (Engineering Director Agent)
 # ------------------------------------------------------------------------------
 echo -e "\n${YELLOW}[FASE 3/4] Sintesi e Generazione Roadmap...${NC}"
-
 if validate_report "$ROADMAP_REPORT" "ROADMAP.md" "$ROADMAP_TEMPLATE" \
     "# Target Release:" \
     "## 🚨 P0 Priority — Critical Blockers & Vulnerabilities" \
@@ -459,8 +460,7 @@ if validate_report "$ROADMAP_REPORT" "ROADMAP.md" "$ROADMAP_TEMPLATE" \
 else
     echo -e "${CYAN}--> Spawning Engineering Director Agent (${MODEL_GENERAL})...${NC}"
     echo "Agisci come Engineering Director. Leggi ${CONTEXT_REPORT}, ${UX_REPORT}, ${SECURITY_REPORT} e ${DATABASE_REPORT}. Leggi il template allegato ${ROADMAP_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e sintetizza tutti i rilievi nel report ${ROADMAP_REPORT}, dividendo i task in P0 (Bloccanti/Sicurezza), P1 (Architettura) e P2 (Debito tecnico). Per ciascun task specifica: Ruolo, File interessati, Impatto ed Effort (XS/S/M/L). Non creare o modificare file del framework AARP o del repository target." | \
-    openclaude --print --dangerously-skip-permissions --model "$MODEL_GENERAL" --file "$ROADMAP_TEMPLATE" --add-dir "$AARP_DIR" --add-dir "$REVIEW_DIR"
-
+    run_agent --model "$MODEL_GENERAL" --file "$ROADMAP_TEMPLATE"
     validate_report "$ROADMAP_REPORT" "ROADMAP.md" "$ROADMAP_TEMPLATE" \
         "# Target Release:" \
         "## 🚨 P0 Priority — Critical Blockers & Vulnerabilities" \
@@ -478,7 +478,6 @@ echo -e "${YELLOW}   PAUSA OPERATIVA: HUMAN-IN-THE-LOOP CHECKPOINT    ${NC}"
 echo -e "${CYAN}====================================================${NC}"
 echo -e "Tutti i report e la ROADMAP.md sono pronti."
 echo -e "Ispeziona ${GREEN}${ROADMAP_REPORT}${NC} prima di procedere con le remediation.\n"
-
 read -p "Vuoi autorizzare la Fase 4 per la risoluzione progressiva della ROADMAP? (s/N): " confirm
 
 if [[ "$confirm" != "s" && "$confirm" != "S" ]]; then
@@ -491,11 +490,12 @@ fi
 # ------------------------------------------------------------------------------
 echo -e "\n${YELLOW}[FASE 4/4] Ciclo Interattivo Remediation...${NC}"
 
-MAIN_BRANCH="release/v2.0.0"
 source "${AARP_DIR}/scripts/roadmap_helpers.sh"
+MAIN_BRANCH="$(roadmap_detect_base_branch "$TARGET_DIR" "$ROADMAP_REPORT")"
+echo -e "${CYAN}Target base branch identificato: ${GREEN}${MAIN_BRANCH}${NC}"
+
 TARGET_PREPARED=false
 SKIPPED_TASK_IDS=()
-
 
 while true; do
     SKIPPED_TASKS_CSV="$(IFS=,; printf '%s' "${SKIPPED_TASK_IDS[*]}")"
@@ -572,7 +572,7 @@ while true; do
     # La roadmap viene aggiornata deterministicamente dall'orchestratore dopo
     # il merge; l'agente deve limitarsi alla remediation e al commit.
     if ! echo "Leggi ${ROADMAP_REPORT}. Esegui esclusivamente il task ${TASK_ID} (${TASK_PRIORITY}) appena confermato. Crea il branch ${TASK_BRANCH_PREFIX}<task-name> corrispondente nel repository target, applica la fix o implementa il cambiamento richiesto e fai il git commit. Non modificare ${ROADMAP_REPORT} e non modificare file del framework AARP." | \
-        openclaude --print --dangerously-skip-permissions --model "$MODEL_GENERAL" --file "$CONTEXT_REPORT" --file "$ROADMAP_REPORT" --add-dir "$AARP_DIR" --add-dir "$REVIEW_DIR"; then
+        run_agent --model "$MODEL_GENERAL"; then
         cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
         rm -f "$ROADMAP_BACKUP"
         echo -e "${RED}Errore durante la remediation di ${TASK_ID}; ROADMAP.md ripristinata.${NC}" >&2
