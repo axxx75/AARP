@@ -16,10 +16,11 @@ NC='\033[0m'
 AARP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TARGET_SPEC=""
 REVIEW_DIR_OVERRIDE=""
+ONLY_DOC=false
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--branch BRANCH_NAME] [--review-dir PATH]
+Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--branch BRANCH_NAME] [--review-dir PATH] [--only-doc]
 
 Review a local checkout or clone a Git repository without copying AARP into it.
 
@@ -27,6 +28,7 @@ Options:
   --target PATH_OR_GIT_URL  Local checkout or Git URL to review.
   --branch BRANCH_NAME      Target base branch for remediation (e.g. main, release/v2.0.0).
   --review-dir PATH         Directory for the clone, reports, and logs.
+  --only-doc                Generate or refresh human documentation only.
   -h, --help                Show this help.
 
 With no --target, the legacy in-place workflow is used and the repository
@@ -62,6 +64,10 @@ while (($# > 0)); do
             fi
             REVIEW_DIR_OVERRIDE="$2"
             shift 2
+            ;;
+        --only-doc)
+            ONLY_DOC=true
+            shift
             ;;
         -h|--help)
             usage
@@ -251,6 +257,13 @@ run_agent() {
     "$@"
 }
 
+run_documentation_agent() {
+    AARP_DOCUMENTATION_OUTPUT_DIR="$DOCUMENTATION_OUTPUT_DIR" TERM=dumb openclaude --print \
+    --add-dir "$AUDIT_DIR" \
+    --add-dir "$DOCUMENTATION_OUTPUT_DIR" \
+    "$@"
+}
+
 LOGS_DIR="${REVIEW_DIR}/logs"
 mkdir -p "$REPORTS_DIR" "$LOGS_DIR"
 
@@ -262,12 +275,18 @@ UX_TEMPLATE="${TEMPLATES_DIR}/AUDIT_UX_PERF.template.md"
 SECURITY_TEMPLATE="${TEMPLATES_DIR}/AUDIT_APPSEC.template.md"
 DATABASE_TEMPLATE="${TEMPLATES_DIR}/AUDIT_DATABASE.template.md"
 ROADMAP_TEMPLATE="${TEMPLATES_DIR}/ROADMAP.template.md"
+DOCUMENTATION_TEMPLATE="${TEMPLATES_DIR}/DOCUMENTATION_ARCHITECT.template.md"
+DOCUMENTATION_PROMPT="${PROMPTS_DIR}/documentation-architect.md"
 
 CONTEXT_REPORT="${REPORTS_DIR}/PROJECT_CONTEXT.md"
 UX_REPORT="${REPORTS_DIR}/AUDIT_UX_UI.md"
 SECURITY_REPORT="${REPORTS_DIR}/AUDIT_SECURITY.md"
 DATABASE_REPORT="${REPORTS_DIR}/AUDIT_DB.md"
 ROADMAP_REPORT="${REPORTS_DIR}/ROADMAP.md"
+DOCUMENTATION_OUTPUT_DIR="${REPORTS_DIR}/documentation"
+DOCUMENTATION_SOURCE_DIR=""
+DOCUMENTATION_TARGET_NAME="docs"
+DOCUMENTATION_ENABLED=false
 
 # ------------------------------------------------------------------------------
 # OPTIMIZATION & CONTEXT CONFIGURATION
@@ -309,9 +328,117 @@ export CLAUDE_CODE_DISABLE_BANNER=1
 
 MODEL_GENERAL="${MODEL_GENERAL:-thinkingmachines/inkling:free}" 	# FreeModel but with limit
 MODEL_REASONING="${MODEL_REASONING:-cohere/north-mini-code:free}"	# FreeModel but with limit 
+MODEL_DOCUMENTATION="${MODEL_DOCUMENTATION:-google/gemini-2.5-flash}"
 
 #MODEL_GENERAL="${MODEL_GENERAL:-google/gemini-2.5-flash}"
 #MODEL_REASONING="${MODEL_REASONING:-google/gemini-2.5-flash}"
+
+# ------------------------------------------------------------------------------
+# DOCUMENTATION ARCHITECT HELPERS
+# ------------------------------------------------------------------------------
+source "${AARP_DIR}/scripts/report_validation.sh"
+source "${AARP_DIR}/scripts/documentation_helpers.sh"
+
+prepare_documentation_branch() {
+    local target_docs_dir="${TARGET_DIR}/${DOCUMENTATION_TARGET_NAME}"
+    local docs_branch
+    local original_branch
+    local documentation_worktree
+    local preparation_result=0
+
+    if [[ -d "$target_docs_dir" ]] && diff -qr "$DOCUMENTATION_OUTPUT_DIR" "$target_docs_dir" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ Documentazione target già aggiornata; nessun branch necessario.${NC}"
+        return 0
+    fi
+
+    local apply_documentation
+    if ! read -r -p "Vuoi preparare la documentazione validata in un branch separato del repository target? (s/N): " apply_documentation; then
+        apply_documentation="n"
+    fi
+    if [[ "$apply_documentation" != "s" && "$apply_documentation" != "S" ]]; then
+        echo -e "${YELLOW}Documentazione mantenuta nello staging ${DOCUMENTATION_OUTPUT_DIR}; il repository target resta invariato.${NC}"
+        return 0
+    fi
+
+    if ! git -C "$TARGET_DIR" rev-parse --show-toplevel >/dev/null 2>&1; then
+        echo -e "${RED}Il repository target non è Git: documentazione pronta nello staging, ma branch non creato.${NC}" >&2
+        return 1
+    fi
+    if [[ -n "$(git -C "$TARGET_DIR" status --porcelain)" ]]; then
+        echo -e "${RED}Il repository target contiene modifiche non salvate; documentazione pronta nello staging, ma branch non creato.${NC}" >&2
+        return 1
+    fi
+    original_branch="$(git -C "$TARGET_DIR" branch --show-current)"
+    if [[ -z "$original_branch" ]]; then
+        echo -e "${RED}Il repository target non è su un branch: documentazione pronta nello staging, ma branch non creato.${NC}" >&2
+        return 1
+    fi
+
+    docs_branch="docs/documentation-$(date +%Y%m%d%H%M%S)"
+    documentation_worktree="${REVIEW_DIR}/documentation-worktree-$(date +%Y%m%d%H%M%S)"
+    git -C "$TARGET_DIR" config user.name >/dev/null 2>&1 ||
+        git -C "$TARGET_DIR" config user.name "AARP Documentation Architect"
+    git -C "$TARGET_DIR" config user.email >/dev/null 2>&1 ||
+        git -C "$TARGET_DIR" config user.email "documentation@aarp.ai"
+    if ! git -C "$TARGET_DIR" worktree add -b "$docs_branch" "$documentation_worktree" "$original_branch"; then
+        echo -e "${RED}Impossibile creare il worktree per il branch documentale ${docs_branch}.${NC}" >&2
+        return 1
+    fi
+
+    if ! mkdir -p "${documentation_worktree}/${DOCUMENTATION_TARGET_NAME}" ||
+        ! cp "${DOCUMENTATION_OUTPUT_DIR}/"*.md "${documentation_worktree}/${DOCUMENTATION_TARGET_NAME}/" ||
+        ! git -C "$documentation_worktree" add "$DOCUMENTATION_TARGET_NAME"; then
+        echo -e "${RED}Impossibile copiare la documentazione nel worktree ${docs_branch}.${NC}" >&2
+        preparation_result=1
+    elif git -C "$documentation_worktree" diff --cached --quiet; then
+        echo -e "${YELLOW}Nessuna modifica documentale da committare sul branch ${docs_branch}.${NC}"
+    elif ! git -C "$documentation_worktree" commit -m "docs: refresh generated documentation"; then
+        echo -e "${RED}Documentazione copiata sul branch ${docs_branch}, ma commit non riuscito.${NC}" >&2
+        preparation_result=1
+    else
+        echo -e "${GREEN}✓ Documentazione pronta nel branch ${docs_branch}. Revisiona e pubblica il branch prima del merge.${NC}"
+    fi
+
+    if ! git -C "$TARGET_DIR" worktree remove --force "$documentation_worktree"; then
+        echo -e "${RED}Impossibile rimuovere il worktree temporaneo ${documentation_worktree}.${NC}" >&2
+        return 1
+    fi
+    return "$preparation_result"
+}
+
+generate_documentation_bundle() {
+    if documentation_output_is_valid "$DOCUMENTATION_OUTPUT_DIR"; then
+        echo -e "${GREEN}✓ [SKIP] Bundle documentale già valido. Ripresa dallo stato salvato.${NC}"
+    else
+        rm -rf "$DOCUMENTATION_OUTPUT_DIR"
+        mkdir -p "$DOCUMENTATION_OUTPUT_DIR"
+        echo -e "${CYAN}--> Avvio Documentation Architect Agent (${MODEL_DOCUMENTATION})...${NC}"
+        echo "Agisci come Documentation Architect Agent. Analizza l'intero snapshot ${AUDIT_DIR}. La documentazione esistente rilevata è: ${DOCUMENTATION_SOURCE_DIR:-nessuna}. Leggi il prompt ${DOCUMENTATION_PROMPT} e il contratto ${DOCUMENTATION_TEMPLATE}. Genera esclusivamente ARCHITECTURE.md, ADMIN_GUIDE.md, USER_GUIDE.md e API_REF.md nella directory di staging ${DOCUMENTATION_OUTPUT_DIR}. Non modificare lo snapshot, il repository target o il framework AARP. Distingui sempre fatti verificati, inferenze e informazioni non verificabili." | \
+            run_documentation_agent --model "$MODEL_DOCUMENTATION" --file "$DOCUMENTATION_PROMPT" --file "$DOCUMENTATION_TEMPLATE"
+        documentation_output_is_valid "$DOCUMENTATION_OUTPUT_DIR" || {
+            echo -e "${RED}Bundle documentale incompleto o con residui di template: aggiornamento bloccato.${NC}" >&2
+            return 1
+        }
+        echo -e "${GREEN}✓ Bundle documentale validato in ${DOCUMENTATION_OUTPUT_DIR}.${NC}"
+    fi
+
+    prepare_documentation_branch
+}
+
+refresh_documentation_after_merge() {
+    if [[ "$AUDIT_DIR" == "$TARGET_DIR" ]]; then
+        echo -e "${YELLOW}Aggiornamento documentale post-merge non automatico nel flusso legacy; riesegui con --target per usare uno snapshot isolato.${NC}"
+        return 0
+    fi
+
+    echo -e "\n${YELLOW}[DOCUMENTATION] Aggiornamento dopo merge approvato...${NC}"
+    rm -rf "$AUDIT_DIR"
+    mkdir -p "$AUDIT_DIR"
+    tar -C "$TARGET_DIR" --exclude=.git -cf - . | tar -xf - -C "$AUDIT_DIR"
+    DOCUMENTATION_SOURCE_DIR="$(find_documentation_dir "$AUDIT_DIR" || true)"
+    rm -rf "$DOCUMENTATION_OUTPUT_DIR"
+    generate_documentation_bundle
+}
 
 # ------------------------------------------------------------------------------
 # -START AARP PIPELINE
@@ -330,23 +457,61 @@ if [ ! -d "$PROMPTS_DIR" ]; then
   exit 1
 fi
 
-for required_file in \
-    "$CONTEXT_TEMPLATE" \
-    "$UX_TEMPLATE" \
-    "$SECURITY_TEMPLATE" \
-    "$DATABASE_TEMPLATE" \
-    "$ROADMAP_TEMPLATE"; do
+required_files=(
+    "$DOCUMENTATION_PROMPT"
+    "$DOCUMENTATION_TEMPLATE"
+)
+if [[ "$ONLY_DOC" != true ]]; then
+    required_files+=(
+        "$CONTEXT_TEMPLATE"
+        "$UX_TEMPLATE"
+        "$SECURITY_TEMPLATE"
+        "$DATABASE_TEMPLATE"
+        "$ROADMAP_TEMPLATE"
+    )
+fi
+for required_file in "${required_files[@]}"; do
     if [ ! -f "$required_file" ]; then
-        echo -e "${RED}Errore Critico: Template richiesto non trovato: ${required_file}${NC}"
+        echo -e "${RED}Errore Critico: File richiesto non trovato: ${required_file}${NC}"
         exit 1
     fi
 done
 
-source "${AARP_DIR}/scripts/report_validation.sh"
-
 # Agents inspect the isolated audit snapshot, while framework files remain in
 # AARP_DIR and the target checkout remains untouched until phase 4 is approved.
 cd "$AUDIT_DIR"
+
+# ------------------------------------------------------------------------------
+# DOCUMENTATION ARCHITECT (optional standalone or integrated phase)
+# ------------------------------------------------------------------------------
+DOCUMENTATION_SOURCE_DIR="$(find_documentation_dir "$AUDIT_DIR" || true)"
+if [[ -n "$DOCUMENTATION_SOURCE_DIR" ]]; then
+    DOCUMENTATION_TARGET_NAME="$(basename "$DOCUMENTATION_SOURCE_DIR")"
+    DOCUMENTATION_ENABLED=true
+    echo -e "\n${CYAN}[DOCUMENTATION] Trovata documentazione esistente: ${DOCUMENTATION_SOURCE_DIR}${NC}"
+else
+    documentation_action="n"
+    if ! read -r -p "Nessuna cartella docs/, doc/ o documents/ trovata. Vuoi generare una nuova documentazione con il Documentation Architect Agent? (s/N): " documentation_action; then
+        documentation_action="n"
+    fi
+    if [[ "$documentation_action" == "s" || "$documentation_action" == "S" ]]; then
+        DOCUMENTATION_ENABLED=true
+        echo -e "${CYAN}[DOCUMENTATION] Verrà preparata una nuova cartella ${DOCUMENTATION_TARGET_NAME}/ dopo validazione e conferma.${NC}"
+    else
+        echo -e "${YELLOW}[DOCUMENTATION] Generazione documentale non autorizzata; repository target invariato.${NC}"
+    fi
+fi
+
+if [[ "$DOCUMENTATION_ENABLED" == true ]]; then
+    if ! generate_documentation_bundle; then
+        exit 1
+    fi
+fi
+
+if [[ "$ONLY_DOC" == true ]]; then
+    echo -e "${GREEN}Modalità --only-doc completata.${NC}"
+    exit 0
+fi
 
 # ------------------------------------------------------------------------------
 # FASE 1: Context Mapping (Architect Agent)
@@ -574,6 +739,12 @@ while true; do
 
     # La roadmap viene aggiornata deterministicamente dall'orchestratore dopo
     # il merge; l'agente deve limitarsi alla remediation e al commit.
+    if ! git checkout "$MAIN_BRANCH" >/dev/null 2>&1; then
+        cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
+        rm -f "$ROADMAP_BACKUP"
+        echo -e "${RED}Impossibile ripristinare il branch ${MAIN_BRANCH} prima della remediation di ${TASK_ID}.${NC}" >&2
+        exit 1
+    fi
     if ! echo "Leggi ${ROADMAP_REPORT}. Esegui esclusivamente il task ${TASK_ID} (${TASK_PRIORITY}) appena confermato. Crea il branch ${TASK_BRANCH_PREFIX}<task-name> corrispondente nel repository target, applica la fix o implementa il cambiamento richiesto e fai il git commit. Non modificare ${ROADMAP_REPORT} e non modificare file del framework AARP." | \
         run_agent --model "$MODEL_GENERAL"; then
         cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
@@ -629,6 +800,12 @@ while true; do
             rm -f "$ROADMAP_BACKUP"
             echo -e "${GREEN}✓ Merge completato su $MAIN_BRANCH${NC}"
             echo -e "${GREEN}✓ ${TASK_ID} marcato come Merged in ${ROADMAP_REPORT}${NC}"
+            if [[ "$DOCUMENTATION_ENABLED" == true ]]; then
+                refresh_documentation_after_merge || {
+                    echo -e "${RED}Aggiornamento documentale post-merge non riuscito; nessun ulteriore task verrà eseguito.${NC}" >&2
+                    exit 1
+                }
+            fi
         else
             cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
             rm -f "$ROADMAP_BACKUP"

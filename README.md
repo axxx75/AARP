@@ -25,8 +25,11 @@ The pipeline uses the `openclaude` command-line agent and OpenRouter as the
 model provider. OpenRouter provides one endpoint through which the model can
 be changed without rewriting the pipeline.
 
-The current implementation is organized into four phases:
+The current implementation combines an optional documentation phase with four
+audit and remediation phases:
 
+0. **Documentation Architect** — optionally reverse-engineers the target into
+   human-readable architecture, administrator, user, and interface guides.
 1. **Context mapping** — an architect agent examines the repository and
    creates `PROJECT_CONTEXT.md`, a technical blueprint for the other agents.
 2. **Parallel deep audit** — three specialist agents review the repository
@@ -54,6 +57,7 @@ but remediation is not allowed to bypass the operator's approval checkpoint.
 │   └── templates/     # Report templates and roadmap structure
 ├── scripts/
 │   ├── orchestrator.sh
+│   ├── documentation_helpers.sh
 │   ├── roadmap_helpers.sh
 │   └── fix_regression.sh
 ├── reviews/            # Generated target checkouts, reports, and logs
@@ -80,14 +84,21 @@ Configure credentials through your local environment or the configuration
 mechanism documented by OpenClaude. Do not commit API keys, tokens, or
 provider configuration containing secrets to the target repository.
 
-The scripts select models through two optional environment variables:
+The scripts select models through optional environment variables:
 
 ```bash
 export MODEL_GENERAL="thinkingmachines/inkling:free"
 export MODEL_REASONING="cohere/north-mini-code:free"
+export MODEL_DOCUMENTATION="google/gemini-2.5-flash"
 ```
 
-If they are not set, the values above are used by `orchestrator.sh`.
+If they are not set, the values above are used by `orchestrator.sh`. The
+Documentation Architect defaults to `google/gemini-2.5-flash` because the
+current OpenClaude configuration declares a large context window for it,
+which is useful when documenting an entire repository. Override the variable
+when a different supported model better matches the target's size or cost
+requirements.
+
 `fix_regression.sh` uses `cohere/north-mini-code:free` for reasoning by
 default. Both scripts also configure conservative temperature, timeout,
 retry, and telemetry-related settings internally.
@@ -137,6 +148,15 @@ bash scripts/orchestrator.sh \
   --target https://github.com/ORG/REPOSITORY.git
 ```
 
+To run only the Documentation Architect and skip context mapping, audits,
+roadmap synthesis, and remediation:
+
+```bash
+bash scripts/orchestrator.sh \
+  --target /path/to/repository-under-review \
+  --only-doc
+```
+
 For a URL target, AARP clones the repository into its review workspace. For a
 local target, it leaves the original checkout where it is. For either target,
 phases 1–3 inspect a disposable snapshot rather than the target checkout, and
@@ -151,7 +171,8 @@ reviews/<repository-name>-<stable-id>/
 │   ├── AUDIT_UX_UI.md
 │   ├── AUDIT_SECURITY.md
 │   ├── AUDIT_DB.md
-│   └── ROADMAP.md
+│   ├── ROADMAP.md
+│   └── documentation/       # Staged human-readable documentation bundle
 └── logs/
     ├── audit_ux.log
     ├── audit_sec.log
@@ -194,6 +215,42 @@ The supported Git-source forms include HTTPS, SSH, SCP-style SSH
 (`user@host:path/to/repository.git`), `git://`, `file://`, and a local bare
 Git repository. A normal local target must be an existing Git checkout.
 
+## Documentation Architect Agent
+
+The **Documentation Architect Agent** (`documentation-architect`) produces
+human-facing documentation that complements, rather than replaces,
+`PROJECT_CONTEXT.md`. The context report is concise material for AI agents;
+the documentation bundle is organized for developers, administrators, product
+managers, and users.
+
+At the start of an execution, AARP looks for `docs/`, `doc/`, or `documents/`
+in the isolated target snapshot. If none exists, it asks before generating a
+new documentation set. Declining leaves the target untouched. When the module
+runs, it writes and validates the following staged files:
+
+| File | Purpose |
+| --- | --- |
+| `ARCHITECTURE.md` | Components, dependencies, data/control flow, and external integrations |
+| `ADMIN_GUIDE.md` | Prerequisites, configuration, environment, logging, operations, and recovery |
+| `USER_GUIDE.md` | Getting started, common workflows, troubleshooting, and support boundaries |
+| `API_REF.md` | Verified APIs or CLIs; explicitly records when no interface is present |
+
+Every document separates verified evidence from inferences and information
+that could not be verified. Incomplete output or residual template text blocks
+the update instead of being treated as a checkpoint.
+
+The agent writes only to
+`reviews/<repository-name>-<stable-id>/reports/documentation/` (or the
+equivalent report directory in legacy mode). After validation, the operator
+may explicitly ask AARP to copy the bundle into an isolated
+`docs/documentation-...` Git branch for review and push. The target repository
+is never modified while the documentation is being analyzed or generated.
+
+After an approved remediation merge in an explicit `--target` workflow, AARP
+can regenerate this staging bundle from a fresh target snapshot and again
+offer a separate documentation branch. The legacy in-place workflow keeps this
+post-merge refresh manual because it has no isolated snapshot.
+
 ## Generated artifacts and resume behavior
 
 When the corresponding report does not already exist in the review directory,
@@ -206,6 +263,7 @@ the orchestrator asks OpenClaude to create:
 | `AUDIT_SECURITY.md` | Security findings with severity, CWE, risk, and remediation guidance |
 | `AUDIT_DB.md` | Database and storage findings with resource impact and query/migration guidance |
 | `ROADMAP.md` | Prioritized P0/P1/P2 remediation backlog and HITL status structure |
+| `documentation/` | Staged Architecture, Administrator, User, and API reference documentation |
 
 The orchestrator is stateful by convention: if one of these files already
 exists, its phase skips that generation step. This allows an interrupted
@@ -318,6 +376,7 @@ target:
 | Security audit | `AUDIT_SECURITY.md` | `AUDIT_APPSEC.template.md` |
 | Database audit | `AUDIT_DB.md` | `AUDIT_DATABASE.template.md` |
 | Roadmap synthesis | `ROADMAP.md` | `ROADMAP.template.md` |
+| Documentation Architect | `documentation/*.md` | `DOCUMENTATION_ARCHITECT.template.md` |
 
 Each prompt instructs the agent to preserve the attached template structure,
 replace placeholders with repository-specific evidence, and avoid leaving
@@ -353,6 +412,8 @@ The current repository is an intentionally small foundation. In particular:
 
 - [`scripts/orchestrator.sh`](scripts/orchestrator.sh) — four-phase pipeline
   and interactive roadmap remediation loop
+- [`scripts/documentation_helpers.sh`](scripts/documentation_helpers.sh) —
+  documentation source detection and bundle validation
 - [`scripts/roadmap_helpers.sh`](scripts/roadmap_helpers.sh) — roadmap task
   selection, priority-to-branch mapping, and status updates
 - [`scripts/fix_regression.sh`](scripts/fix_regression.sh) — regression
