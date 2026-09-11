@@ -130,6 +130,24 @@ roadmap_task_branch_prefix() {
     esac
 }
 
+remediation_extract_verdict() {
+    local report_path="$1"
+    awk '
+        /^## Verdict/ { in_section = 1; next }
+        /^## / { in_section = 0 }
+        in_section
+    ' "$report_path" | grep -oE 'APPROVED|CHANGES_REQUESTED|BLOCKED' | head -n 1
+}
+
+remediation_extract_test_status() {
+    local report_path="$1"
+    awk '
+        /^## Overall Status/ { in_section = 1; next }
+        /^## / { in_section = 0 }
+        in_section
+    ' "$report_path" | grep -oE 'PASS|FAIL|BLOCKED' | head -n 1
+}
+
 roadmap_detect_base_branch() {
     local target_repo="${1:-.}"
     local roadmap_file="${2:-}"
