@@ -16,6 +16,23 @@ mkdir -p "${TEMP_DIR}/repository/doc" "${TEMP_DIR}/repository/docs"
 OUTPUT_DIR="${TEMP_DIR}/documentation"
 mkdir -p "$OUTPUT_DIR"
 
+cat > "${OUTPUT_DIR}/OVERVIEW.md" <<'EOF'
+# Project Overview
+## Evidence classification
+### Verified
+The fixture is a documentation bundle.
+### Inferred
+No additional overview inference is required for this fixture.
+### Not verifiable
+No production audience is present in this fixture.
+## What this project is
+A minimal fixture describing the project purpose.
+## How it works
+The orchestrator coordinates prompts and templates.
+## Where to read next
+See ARCHITECTURE.md, ADMIN_GUIDE.md, USER_GUIDE.md, and API_REF.md.
+EOF
+
 cat > "${OUTPUT_DIR}/ARCHITECTURE.md" <<'EOF'
 # Architecture
 ## Evidence classification
@@ -113,7 +130,7 @@ if documentation_output_is_valid "$OUTPUT_DIR" >/dev/null 2>&1; then
     exit 1
 fi
 
-: > "${OUTPUT_DIR}/API_REF.md"
+printf 'The command-line interface is the supported interface.\n' > "${OUTPUT_DIR}/API_REF.md"
 printf '\n[Describe the service]\n' >> "${OUTPUT_DIR}/ARCHITECTURE.md"
 if ! documentation_output_is_valid "$OUTPUT_DIR" >/dev/null 2>&1; then
     echo "Expected non-empty documentation with template text to remain valid." >&2

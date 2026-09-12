@@ -19,6 +19,7 @@ documentation_missing_outputs() {
     local documentation_dir="$1"
     local document_name
     local -a required_documents=(
+        "OVERVIEW.md"
         "ARCHITECTURE.md"
         "ADMIN_GUIDE.md"
         "USER_GUIDE.md"

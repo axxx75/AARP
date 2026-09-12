@@ -1,7 +1,7 @@
 # Documentation Architect — Output Contract
 
 Analyze only the repository snapshot supplied by the orchestrator. Write the
-four files below in the exact staging directory supplied at runtime. Write
+five files below in the exact staging directory supplied at runtime. Write
 facts verified from the repository, clearly label reasonable inferences, and
 state when information cannot be verified. Do not invent product behavior,
 configuration, APIs, or operations.
@@ -9,6 +9,30 @@ configuration, APIs, or operations.
 Create every listed file, even when a topic is absent from the repository.
 For example, `API_REF.md` must state that no API or CLI was verified when that
 is the case.
+
+## FILE OUTPUT: OVERVIEW.md
+
+```markdown
+# Project Overview
+
+## What this project is
+One compact, human-readable summary of the verified purpose, audience, and
+business value of the project. A reader should understand the project in under
+two minutes.
+
+## How it works
+High-level description of the main flow: entry points, core components, and
+how data or requests move through the system.
+
+## Where to read next
+Pointers to ARCHITECTURE.md, ADMIN_GUIDE.md, USER_GUIDE.md, and API_REF.md
+with one line each about what they cover.
+
+## Evidence classification
+### Verified
+### Inferred
+### Not verifiable
+```
 
 ## FILE OUTPUT: ARCHITECTURE.md
 

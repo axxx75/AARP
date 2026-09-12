@@ -23,6 +23,7 @@ Read the attached `DOCUMENTATION_ARCHITECT.template.md` before writing. It is
 the mandatory contract for all output files. Create the required Markdown files
 inside the exact output directory supplied by the orchestrator:
 
+- `OVERVIEW.md`
 - `ARCHITECTURE.md`
 - `ADMIN_GUIDE.md`
 - `USER_GUIDE.md`

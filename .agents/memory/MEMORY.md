@@ -1,1 +1,0 @@
-- [GitHub connector publishing](github-connector-publishing.md) — connector OAuth does not authenticate Git HTTPS; API publishing must preserve exact Git bytes and modes.

@@ -430,3 +430,5 @@ FodyWeavers.xsd
 
 # AARP target checkouts and generated review artifacts
 /reviews/
+/logs
+./logs

@@ -20,6 +20,23 @@ if [[ "${FAKE_DOCUMENTATION_MODE:-valid}" == "invalid" ]]; then
     exit 0
 fi
 
+cat > "${AARP_DOCUMENTATION_OUTPUT_DIR}/OVERVIEW.md" <<'DOC'
+# Project Overview
+## Evidence classification
+### Verified
+The fixture contains a Git repository.
+### Inferred
+No additional overview inference is required.
+### Not verifiable
+No production audience is present.
+## What this project is
+The fixture is a minimal repository under analysis by AARP.
+## How it works
+AARP orchestrates documentation generation from the repository snapshot.
+## Where to read next
+See ARCHITECTURE.md, ADMIN_GUIDE.md, USER_GUIDE.md, and API_REF.md.
+DOC
+
 cat > "${AARP_DOCUMENTATION_OUTPUT_DIR}/ARCHITECTURE.md" <<'DOC'
 # Architecture
 ## Evidence classification
@@ -125,7 +142,6 @@ run_only_doc() {
     local mode="${4:-valid}"
 
     printf '%b' "$input" | \
-        AARP_ENV_FILE="/dev/null" \
         PATH="${FAKE_BIN}:${PATH}" \
         FAKE_OPENCLAUDE_LOG="$FAKE_LOG" \
         FAKE_DOCUMENTATION_MODE="$mode" \
