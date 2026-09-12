@@ -16,10 +16,11 @@ NC='\033[0m'
 AARP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TARGET_SPEC=""
 REVIEW_DIR_OVERRIDE=""
+ONLY_DOC=false
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--branch BRANCH_NAME] [--review-dir PATH]
+Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--branch BRANCH_NAME] [--review-dir PATH] [--only-doc]
 
 Review a local checkout or clone a Git repository without copying AARP into it.
 
@@ -27,6 +28,7 @@ Options:
   --target PATH_OR_GIT_URL  Local checkout or Git URL to review.
   --branch BRANCH_NAME      Target base branch for remediation (e.g. main, release/v2.0.0).
   --review-dir PATH         Directory for the clone, reports, and logs.
+  --only-doc                Generate or refresh human documentation only.
   -h, --help                Show this help.
 
 With no --target, the legacy in-place workflow is used and the repository
@@ -62,6 +64,10 @@ while (($# > 0)); do
             fi
             REVIEW_DIR_OVERRIDE="$2"
             shift 2
+            ;;
+        --only-doc)
+            ONLY_DOC=true
+            shift
             ;;
         -h|--help)
             usage
@@ -251,6 +257,15 @@ run_agent() {
     "$@"
 }
 
+run_documentation_agent() {
+    local documentation_log="${LOGS_DIR}/documentation-agent.log"
+
+    AARP_DOCUMENTATION_OUTPUT_DIR="$DOCUMENTATION_OUTPUT_DIR" TERM=dumb openclaude --print \
+    --add-dir "$AUDIT_DIR" \
+    --add-dir "$DOCUMENTATION_OUTPUT_DIR" \
+    "$@" 2>&1 | tee -a "$documentation_log"
+}
+
 LOGS_DIR="${REVIEW_DIR}/logs"
 mkdir -p "$REPORTS_DIR" "$LOGS_DIR"
 
@@ -261,13 +276,27 @@ CONTEXT_TEMPLATE="${TEMPLATES_DIR}/PROJECT_CONTEXT.template.md"
 UX_TEMPLATE="${TEMPLATES_DIR}/AUDIT_UX_PERF.template.md"
 SECURITY_TEMPLATE="${TEMPLATES_DIR}/AUDIT_APPSEC.template.md"
 DATABASE_TEMPLATE="${TEMPLATES_DIR}/AUDIT_DATABASE.template.md"
+QUALITY_TEMPLATE="${TEMPLATES_DIR}/AUDIT_QUALITY.template.md"
+INFRA_TEMPLATE="${TEMPLATES_DIR}/AUDIT_INFRA.template.md"
+DOC_AUDIT_TEMPLATE="${TEMPLATES_DIR}/AUDIT_DOC_COVERAGE.template.md"
+REVIEW_TEMPLATE="${TEMPLATES_DIR}/REVIEW_REPORT.template.md"
+TEST_TEMPLATE="${TEMPLATES_DIR}/TEST_REPORT.template.md"
 ROADMAP_TEMPLATE="${TEMPLATES_DIR}/ROADMAP.template.md"
+DOCUMENTATION_TEMPLATE="${TEMPLATES_DIR}/DOCUMENTATION_ARCHITECT.template.md"
+DOCUMENTATION_PROMPT="${PROMPTS_DIR}/documentation-architect.md"
 
 CONTEXT_REPORT="${REPORTS_DIR}/PROJECT_CONTEXT.md"
 UX_REPORT="${REPORTS_DIR}/AUDIT_UX_UI.md"
 SECURITY_REPORT="${REPORTS_DIR}/AUDIT_SECURITY.md"
 DATABASE_REPORT="${REPORTS_DIR}/AUDIT_DB.md"
+QUALITY_REPORT="${REPORTS_DIR}/AUDIT_QUALITY.md"
+INFRA_REPORT="${REPORTS_DIR}/AUDIT_INFRA.md"
+DOC_AUDIT_REPORT="${REPORTS_DIR}/AUDIT_DOC_COVERAGE.md"
 ROADMAP_REPORT="${REPORTS_DIR}/ROADMAP.md"
+DOCUMENTATION_OUTPUT_DIR="${REPORTS_DIR}/documentation"
+DOCUMENTATION_SOURCE_DIR=""
+DOCUMENTATION_TARGET_NAME="docs"
+DOCUMENTATION_ENABLED=false
 
 # ------------------------------------------------------------------------------
 # OPTIMIZATION & CONTEXT CONFIGURATION
@@ -307,11 +336,135 @@ export CLAUDE_CODE_DISABLE_BANNER=1
 #MODEL_GENERAL="${MODEL_GENERAL:-anthropic/claude-3.5-sonnet}"
 #MODEL_REASONING="${MODEL_REASONING:-deepseek/deepseek-r1}"
 
-MODEL_GENERAL="${MODEL_GENERAL:-thinkingmachines/inkling:free}" 	# FreeModel but with limit
-MODEL_REASONING="${MODEL_REASONING:-cohere/north-mini-code:free}"	# FreeModel but with limit 
+#MODEL_GENERAL="${MODEL_GENERAL:-thinkingmachines/inkling:free}"        # FreeModel but with limit
+#MODEL_REASONING="${MODEL_REASONING:-cohere/north-mini-code:free}"      # FreeModel but with limit
+MODEL_DOCUMENTATION="${MODEL_DOCUMENTATION:-google/gemini-2.5-flash}"
 
-#MODEL_GENERAL="${MODEL_GENERAL:-google/gemini-2.5-flash}"
-#MODEL_REASONING="${MODEL_REASONING:-google/gemini-2.5-flash}"
+MODEL_GENERAL="${MODEL_GENERAL:-google/gemini-2.5-flash}"
+MODEL_REASONING="${MODEL_REASONING:-google/gemini-2.5-flash}"
+
+# ------------------------------------------------------------------------------
+# DOCUMENTATION ARCHITECT HELPERS
+# ------------------------------------------------------------------------------
+source "${AARP_DIR}/scripts/report_validation.sh"
+source "${AARP_DIR}/scripts/documentation_helpers.sh"
+
+prepare_documentation_branch() {
+    local target_docs_dir="${TARGET_DIR}/${DOCUMENTATION_TARGET_NAME}"
+    local docs_branch
+    local original_branch
+    local documentation_worktree
+    local preparation_result=0
+
+    if [[ -d "$target_docs_dir" ]] && diff -qr "$DOCUMENTATION_OUTPUT_DIR" "$target_docs_dir" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓ Documentazione target già aggiornata; nessun branch necessario.${NC}"
+        return 0
+    fi
+
+    local apply_documentation
+    if ! read -r -p "Vuoi preparare la documentazione validata in un branch separato del repository target? (s/N): " apply_documentation; then
+        apply_documentation="n"
+    fi
+    if [[ "$apply_documentation" != "s" && "$apply_documentation" != "S" ]]; then
+        echo -e "${YELLOW}Documentazione mantenuta nello staging ${DOCUMENTATION_OUTPUT_DIR}; il repository target resta invariato.${NC}"
+        return 0
+    fi
+
+    if ! git -C "$TARGET_DIR" rev-parse --show-toplevel >/dev/null 2>&1; then
+        echo -e "${RED}Il repository target non è Git: documentazione pronta nello staging, ma branch non creato.${NC}" >&2
+        return 1
+    fi
+    if [[ -n "$(git -C "$TARGET_DIR" status --porcelain)" ]]; then
+        echo -e "${RED}Il repository target contiene modifiche non salvate; documentazione pronta nello staging, ma branch non creato.${NC}" >&2
+        return 1
+    fi
+    original_branch="$(git -C "$TARGET_DIR" branch --show-current)"
+    if [[ -z "$original_branch" ]]; then
+        echo -e "${RED}Il repository target non è su un branch: documentazione pronta nello staging, ma branch non creato.${NC}" >&2
+        return 1
+    fi
+
+    docs_branch="docs/documentation-$(date +%Y%m%d%H%M%S)"
+    documentation_worktree="${REVIEW_DIR}/documentation-worktree-$(date +%Y%m%d%H%M%S)"
+    git -C "$TARGET_DIR" config user.name >/dev/null 2>&1 ||
+        git -C "$TARGET_DIR" config user.name "AARP Documentation Architect"
+    git -C "$TARGET_DIR" config user.email >/dev/null 2>&1 ||
+        git -C "$TARGET_DIR" config user.email "documentation@aarp.ai"
+    if ! git -C "$TARGET_DIR" worktree add -b "$docs_branch" "$documentation_worktree" "$original_branch"; then
+        echo -e "${RED}Impossibile creare il worktree per il branch documentale ${docs_branch}.${NC}" >&2
+        return 1
+    fi
+
+    if ! mkdir -p "${documentation_worktree}/${DOCUMENTATION_TARGET_NAME}" ||
+        ! cp "${DOCUMENTATION_OUTPUT_DIR}/"*.md "${documentation_worktree}/${DOCUMENTATION_TARGET_NAME}/" ||
+        ! git -C "$documentation_worktree" add "$DOCUMENTATION_TARGET_NAME"; then
+        echo -e "${RED}Impossibile copiare la documentazione nel worktree ${docs_branch}.${NC}" >&2
+        preparation_result=1
+    elif git -C "$documentation_worktree" diff --cached --quiet; then
+        echo -e "${YELLOW}Nessuna modifica documentale da committare sul branch ${docs_branch}.${NC}"
+    elif ! git -C "$documentation_worktree" commit -m "docs: refresh generated documentation"; then
+        echo -e "${RED}Documentazione copiata sul branch ${docs_branch}, ma commit non riuscito.${NC}" >&2
+        preparation_result=1
+    else
+        echo -e "${GREEN}✓ Documentazione pronta nel branch ${docs_branch}. Revisiona e pubblica il branch prima del merge.${NC}"
+    fi
+
+    if ! git -C "$TARGET_DIR" worktree remove --force "$documentation_worktree"; then
+        echo -e "${RED}Impossibile rimuovere il worktree temporaneo ${documentation_worktree}.${NC}" >&2
+        return 1
+    fi
+    return "$preparation_result"
+}
+
+generate_documentation_bundle() {
+    local missing_document
+
+    if documentation_output_is_valid "$DOCUMENTATION_OUTPUT_DIR"; then
+        echo -e "${GREEN}✓ [SKIP] Bundle documentale già valido. Ripresa dallo stato salvato.${NC}"
+    else
+        rm -rf "$DOCUMENTATION_OUTPUT_DIR"
+        mkdir -p "$DOCUMENTATION_OUTPUT_DIR"
+        echo -e "${CYAN}--> Avvio Documentation Architect Agent (${MODEL_DOCUMENTATION})...${NC}"
+        if ! echo "Agisci come Documentation Architect Agent. Analizza l'intero snapshot ${AUDIT_DIR}. La documentazione esistente rilevata è: ${DOCUMENTATION_SOURCE_DIR:-nessuna}. Leggi il prompt ${DOCUMENTATION_PROMPT} e il contratto ${DOCUMENTATION_TEMPLATE}. Crea ARCHITECTURE.md, ADMIN_GUIDE.md, USER_GUIDE.md e API_REF.md nella directory di staging ${DOCUMENTATION_OUTPUT_DIR}. Non limitarti a descrivere le azioni: completa tutte le scritture prima di terminare. Non modificare lo snapshot, il repository target o il framework AARP. Distingui sempre fatti verificati, inferenze e informazioni non verificabili." | \
+            run_documentation_agent --model "$MODEL_DOCUMENTATION" --file "$DOCUMENTATION_PROMPT" --file "$DOCUMENTATION_TEMPLATE"; then
+            echo -e "${RED}Documentation Architect Agent terminato con errore; consulta ${LOGS_DIR}/documentation-agent.log.${NC}" >&2
+            return 1
+        fi
+
+        while IFS= read -r missing_document; do
+            [[ -n "$missing_document" ]] || continue
+            echo -e "${YELLOW}--> Documento mancante: ${missing_document}. Avvio completamento mirato...${NC}"
+            if ! echo "Il primo passaggio ha terminato senza creare ${missing_document}. Genera adesso soltanto ${missing_document} nella directory ${DOCUMENTATION_OUTPUT_DIR}. Non modificare i documenti già presenti e non limitarti a descrivere l'azione: scrivi il file prima di terminare." | \
+                run_documentation_agent --model "$MODEL_DOCUMENTATION" --file "$DOCUMENTATION_PROMPT" --file "$DOCUMENTATION_TEMPLATE"; then
+                echo -e "${RED}Completamento di ${missing_document} fallito; consulta ${LOGS_DIR}/documentation-agent.log.${NC}" >&2
+                return 1
+            fi
+        done < <(documentation_missing_outputs "$DOCUMENTATION_OUTPUT_DIR")
+
+        documentation_output_is_valid "$DOCUMENTATION_OUTPUT_DIR" || {
+            echo -e "${RED}Bundle documentale incompleto: aggiornamento bloccato. Consulta ${LOGS_DIR}/documentation-agent.log.${NC}" >&2
+            return 1
+        }
+        echo -e "${GREEN}✓ Bundle documentale validato in ${DOCUMENTATION_OUTPUT_DIR}.${NC}"
+    fi
+
+    prepare_documentation_branch
+}
+
+refresh_documentation_after_merge() {
+    if [[ "$AUDIT_DIR" == "$TARGET_DIR" ]]; then
+        echo -e "${YELLOW}Aggiornamento documentale post-merge non automatico nel flusso legacy; riesegui con --target per usare uno snapshot isolato.${NC}"
+        return 0
+    fi
+
+    echo -e "\n${YELLOW}[DOCUMENTATION] Aggiornamento dopo merge approvato...${NC}"
+    rm -rf "$AUDIT_DIR"
+    mkdir -p "$AUDIT_DIR"
+    tar -C "$TARGET_DIR" --exclude=.git -cf - . | tar -xf - -C "$AUDIT_DIR"
+    DOCUMENTATION_SOURCE_DIR="$(find_documentation_dir "$AUDIT_DIR" || true)"
+    rm -rf "$DOCUMENTATION_OUTPUT_DIR"
+    generate_documentation_bundle
+}
 
 # ------------------------------------------------------------------------------
 # -START AARP PIPELINE
@@ -330,23 +483,66 @@ if [ ! -d "$PROMPTS_DIR" ]; then
   exit 1
 fi
 
-for required_file in \
-    "$CONTEXT_TEMPLATE" \
-    "$UX_TEMPLATE" \
-    "$SECURITY_TEMPLATE" \
-    "$DATABASE_TEMPLATE" \
-    "$ROADMAP_TEMPLATE"; do
+required_files=(
+    "$DOCUMENTATION_PROMPT"
+    "$DOCUMENTATION_TEMPLATE"
+)
+if [[ "$ONLY_DOC" != true ]]; then
+    required_files+=(
+        "$CONTEXT_TEMPLATE"
+        "$UX_TEMPLATE"
+        "$SECURITY_TEMPLATE"
+        "$DATABASE_TEMPLATE"
+        "$QUALITY_TEMPLATE"
+        "$INFRA_TEMPLATE"
+        "$DOC_AUDIT_TEMPLATE"
+        "$REVIEW_TEMPLATE"
+        "$TEST_TEMPLATE"
+        "$ROADMAP_TEMPLATE"
+    )
+fi
+for required_file in "${required_files[@]}"; do
     if [ ! -f "$required_file" ]; then
-        echo -e "${RED}Errore Critico: Template richiesto non trovato: ${required_file}${NC}"
+        echo -e "${RED}Errore Critico: File richiesto non trovato: ${required_file}${NC}"
         exit 1
     fi
 done
 
-source "${AARP_DIR}/scripts/report_validation.sh"
-
 # Agents inspect the isolated audit snapshot, while framework files remain in
 # AARP_DIR and the target checkout remains untouched until phase 4 is approved.
 cd "$AUDIT_DIR"
+
+# ------------------------------------------------------------------------------
+# DOCUMENTATION ARCHITECT (optional standalone or integrated phase)
+# ------------------------------------------------------------------------------
+DOCUMENTATION_SOURCE_DIR="$(find_documentation_dir "$AUDIT_DIR" || true)"
+if [[ -n "$DOCUMENTATION_SOURCE_DIR" ]]; then
+    DOCUMENTATION_TARGET_NAME="$(basename "$DOCUMENTATION_SOURCE_DIR")"
+    DOCUMENTATION_ENABLED=true
+    echo -e "\n${CYAN}[DOCUMENTATION] Trovata documentazione esistente: ${DOCUMENTATION_SOURCE_DIR}${NC}"
+else
+    documentation_action="n"
+    if ! read -r -p "Nessuna cartella docs/, doc/ o documents/ trovata. Vuoi generare una nuova documentazione con il Documentation Architect Agent? (s/N): " documentation_action; then
+        documentation_action="n"
+    fi
+    if [[ "$documentation_action" == "s" || "$documentation_action" == "S" ]]; then
+        DOCUMENTATION_ENABLED=true
+        echo -e "${CYAN}[DOCUMENTATION] Verrà preparata una nuova cartella ${DOCUMENTATION_TARGET_NAME}/ dopo validazione e conferma.${NC}"
+    else
+        echo -e "${YELLOW}[DOCUMENTATION] Generazione documentale non autorizzata; repository target invariato.${NC}"
+    fi
+fi
+
+if [[ "$DOCUMENTATION_ENABLED" == true ]]; then
+    if ! generate_documentation_bundle; then
+        exit 1
+    fi
+fi
+
+if [[ "$ONLY_DOC" == true ]]; then
+    echo -e "${GREEN}Modalità --only-doc completata.${NC}"
+    exit 0
+fi
 
 # ------------------------------------------------------------------------------
 # FASE 1: Context Mapping (Architect Agent)
@@ -440,6 +636,70 @@ else
     pids+=($!)
 fi
 
+# 2.4 Audit Code Quality & Maintainability
+if validate_report "$QUALITY_REPORT" "AUDIT_QUALITY.md" "$QUALITY_TEMPLATE" \
+    "# Code Quality & Maintainability Audit Report:" \
+    "## Executive Quality Summary" \
+    "## Detailed Maintainability Findings" \
+    "## Verification Checklist"; then
+    echo -e "${GREEN}✓ [SKIP] AUDIT_QUALITY.md già presente.${NC}"
+else
+    echo -e "${CYAN}--> Launching Code Quality Agent (${MODEL_GENERAL})...${NC}"
+    (
+        echo "Leggi ${CONTEXT_REPORT} e il codice dello snapshot del repository target. Leggi il template allegato ${QUALITY_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e salva il report completo in ${QUALITY_REPORT}. Non creare o modificare file del framework AARP o del repository target." | \
+        run_agent --model "$MODEL_GENERAL" --file "${PROMPTS_DIR}/code-quality.md" --file "$QUALITY_TEMPLATE"
+        validate_report "$QUALITY_REPORT" "AUDIT_QUALITY.md" "$QUALITY_TEMPLATE" \
+            "# Code Quality & Maintainability Audit Report:" \
+            "## Executive Quality Summary" \
+            "## Detailed Maintainability Findings" \
+            "## Verification Checklist"
+    ) > "${LOGS_DIR}/audit_quality.log" 2>&1 &
+    pids+=($!)
+fi
+
+# 2.5 Audit DevOps & Infrastructure
+if validate_report "$INFRA_REPORT" "AUDIT_INFRA.md" "$INFRA_TEMPLATE" \
+    "# Infrastructure & CI/CD Audit Report:" \
+    "## Executive Infrastructure Summary" \
+    "## Detailed Infrastructure Findings" \
+    "## Verification & Next Steps"; then
+    echo -e "${GREEN}✓ [SKIP] AUDIT_INFRA.md già presente.${NC}"
+else
+    echo -e "${CYAN}--> Launching DevOps/Infra Agent (${MODEL_REASONING})...${NC}"
+    (
+        echo "Leggi ${CONTEXT_REPORT} e i manifest di build/CI/container dello snapshot del repository target. Leggi il template allegato ${INFRA_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e salva il report completo in ${INFRA_REPORT}. Non creare o modificare file del framework AARP o del repository target." | \
+        run_agent --model "$MODEL_REASONING" --file "${PROMPTS_DIR}/devops-infra.md" --file "$INFRA_TEMPLATE"
+        validate_report "$INFRA_REPORT" "AUDIT_INFRA.md" "$INFRA_TEMPLATE" \
+            "# Infrastructure & CI/CD Audit Report:" \
+            "## Executive Infrastructure Summary" \
+            "## Detailed Infrastructure Findings" \
+            "## Verification & Next Steps"
+    ) > "${LOGS_DIR}/audit_infra.log" 2>&1 &
+    pids+=($!)
+fi
+
+# 2.6 Audit Documentation Coverage (audit dell'esistente; distinto dal
+# Documentation Architect Agent, che genera nuova documentazione)
+if validate_report "$DOC_AUDIT_REPORT" "AUDIT_DOC_COVERAGE.md" "$DOC_AUDIT_TEMPLATE" \
+    "# Documentation Coverage Audit Report:" \
+    "## Executive Documentation Summary" \
+    "## Detailed Documentation Findings" \
+    "## Verification Checklist"; then
+    echo -e "${GREEN}✓ [SKIP] AUDIT_DOC_COVERAGE.md già presente.${NC}"
+else
+    echo -e "${CYAN}--> Launching Documentation Coverage Agent (${MODEL_GENERAL})...${NC}"
+    (
+        echo "Leggi ${CONTEXT_REPORT}, il README e la documentazione dello snapshot del repository target. Leggi il template allegato ${DOC_AUDIT_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e salva il report completo in ${DOC_AUDIT_REPORT}. Non creare o modificare file del framework AARP o del repository target." | \
+        run_agent --model "$MODEL_GENERAL" --file "${PROMPTS_DIR}/doc-audit.md" --file "$DOC_AUDIT_TEMPLATE"
+        validate_report "$DOC_AUDIT_REPORT" "AUDIT_DOC_COVERAGE.md" "$DOC_AUDIT_TEMPLATE" \
+            "# Documentation Coverage Audit Report:" \
+            "## Executive Documentation Summary" \
+            "## Detailed Documentation Findings" \
+            "## Verification Checklist"
+    ) > "${LOGS_DIR}/audit_doc_coverage.log" 2>&1 &
+    pids+=($!)
+fi
+
 # Sincronizzazione dei job lanciati in questa esecuzione
 if [ ${#pids[@]} -gt 0 ]; then
     echo -e "${YELLOW}In attesa del completamento degli agenti attivi (${#pids[@]})...${NC}"
@@ -462,7 +722,7 @@ if validate_report "$ROADMAP_REPORT" "ROADMAP.md" "$ROADMAP_TEMPLATE" \
     echo -e "${GREEN}✓ [SKIP] ROADMAP.md già presente.${NC}"
 else
     echo -e "${CYAN}--> Spawning Engineering Director Agent (${MODEL_GENERAL})...${NC}"
-    echo "Agisci come Engineering Director. Leggi ${CONTEXT_REPORT}, ${UX_REPORT}, ${SECURITY_REPORT} e ${DATABASE_REPORT}. Leggi il template allegato ${ROADMAP_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e sintetizza tutti i rilievi nel report ${ROADMAP_REPORT}, dividendo i task in P0 (Bloccanti/Sicurezza), P1 (Architettura) e P2 (Debito tecnico). Per ciascun task specifica: Ruolo, File interessati, Impatto ed Effort (XS/S/M/L). Non creare o modificare file del framework AARP o del repository target." | \
+    echo "Agisci come Engineering Director. Leggi ${CONTEXT_REPORT}, ${UX_REPORT}, ${SECURITY_REPORT}, ${DATABASE_REPORT}, ${QUALITY_REPORT}, ${INFRA_REPORT} e ${DOC_AUDIT_REPORT}. Leggi il template allegato ${ROADMAP_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e sintetizza tutti i rilievi nel report ${ROADMAP_REPORT}, dividendo i task in P0 (Bloccanti/Sicurezza), P1 (Architettura) e P2 (Debito tecnico). Per ciascun task specifica: Ruolo, File interessati, Impatto ed Effort (XS/S/M/L). Non creare o modificare file del framework AARP o del repository target." | \
     run_agent --model "$MODEL_GENERAL" --file "$ROADMAP_TEMPLATE"
     validate_report "$ROADMAP_REPORT" "ROADMAP.md" "$ROADMAP_TEMPLATE" \
         "# Target Release:" \
@@ -570,23 +830,110 @@ while true; do
         TARGET_PREPARED=true
     fi
 
-    echo -e "${CYAN}--> Invocazione Agent per ${TASK_ID} (${TASK_PRIORITY})...${NC}"
+    echo -e "${CYAN}--> Invocazione catena Developer → Reviewer → QA/Test per ${TASK_ID} (${TASK_PRIORITY})...${NC}"
 
-    # La roadmap viene aggiornata deterministicamente dall'orchestratore dopo
-    # il merge; l'agente deve limitarsi alla remediation e al commit.
-    if ! echo "Leggi ${ROADMAP_REPORT}. Esegui esclusivamente il task ${TASK_ID} (${TASK_PRIORITY}) appena confermato. Crea il branch ${TASK_BRANCH_PREFIX}<task-name> corrispondente nel repository target, applica la fix o implementa il cambiamento richiesto e fai il git commit. Non modificare ${ROADMAP_REPORT} e non modificare file del framework AARP." | \
-        run_agent --model "$MODEL_GENERAL"; then
-        cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
-        rm -f "$ROADMAP_BACKUP"
-        echo -e "${RED}Errore durante la remediation di ${TASK_ID}; ROADMAP.md ripristinata.${NC}" >&2
-        exit 1
-    fi
+    REMEDIATION_DIR="${REPORTS_DIR}/remediation"
+    mkdir -p "$REMEDIATION_DIR"
+    TASK_REVIEW_REPORT="${REMEDIATION_DIR}/${TASK_ID}_REVIEW.md"
+    TASK_TEST_REPORT="${REMEDIATION_DIR}/${TASK_ID}_TEST.md"
+    TASK_DIFF_FILE="${REMEDIATION_DIR}/${TASK_ID}.patch"
+    TASK_FEEDBACK_FILE="${REMEDIATION_DIR}/${TASK_ID}_FEEDBACK.md"
 
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    MAX_REMEDIATION_ATTEMPTS=3
+    TASK_VERIFIED=false
+    FEEDBACK_TEXT=""
+    CURRENT_BRANCH=""
 
-    # L'agente deve rimanere sul prefisso coerente con la priorità confermata.
-    if [[ "$CURRENT_BRANCH" == "${TASK_BRANCH_PREFIX}"* ]]; then
-        echo -e "\n${GREEN}✓ Task completato sul branch: ${CURRENT_BRANCH}${NC}"
+    for attempt in $(seq 1 "$MAX_REMEDIATION_ATTEMPTS"); do
+        echo -e "${CYAN}--- Tentativo ${attempt}/${MAX_REMEDIATION_ATTEMPTS} per ${TASK_ID} ---${NC}"
+
+        # La roadmap viene aggiornata deterministicamente dall'orchestratore dopo
+        # il merge; l'agente deve limitarsi alla remediation e al commit.
+        if ! git checkout "$MAIN_BRANCH" >/dev/null 2>&1 && [[ "$attempt" -eq 1 ]]; then
+            cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
+            rm -f "$ROADMAP_BACKUP"
+            echo -e "${RED}Impossibile ripristinare il branch ${MAIN_BRANCH} prima della remediation di ${TASK_ID}.${NC}" >&2
+            exit 1
+        fi
+
+        # --- Remediation Engineer ---
+        DEV_PROMPT="Leggi ${ROADMAP_REPORT}. Esegui esclusivamente il task ${TASK_ID} (${TASK_PRIORITY}) appena confermato."
+        if [[ "$attempt" -eq 1 ]]; then
+            DEV_PROMPT+=" Crea il branch ${TASK_BRANCH_PREFIX}<task-name> corrispondente nel repository target, applica la fix o implementa il cambiamento richiesto e fai il git commit."
+        else
+            DEV_PROMPT+=" Sei già sul branch di task esistente ${CURRENT_BRANCH}. Il tentativo precedente non ha superato la review o i test: leggi il feedback allegato e correggi la fix con un nuovo commit sullo stesso branch, senza crearne uno nuovo."
+        fi
+        DEV_PROMPT+=" Non modificare ${ROADMAP_REPORT} e non modificare file del framework AARP."
+
+        DEV_FILES=()
+        if [[ -n "$FEEDBACK_TEXT" ]]; then
+            printf '%s\n' "$FEEDBACK_TEXT" > "$TASK_FEEDBACK_FILE"
+            DEV_FILES+=(--file "$TASK_FEEDBACK_FILE")
+        fi
+
+        if ! echo "$DEV_PROMPT" | run_agent --model "$MODEL_GENERAL" --file "${PROMPTS_DIR}/developer.md" "${DEV_FILES[@]}"; then
+            echo -e "${RED}Errore durante la remediation di ${TASK_ID} (tentativo ${attempt}).${NC}" >&2
+            break
+        fi
+
+        CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        if [[ "$CURRENT_BRANCH" != "${TASK_BRANCH_PREFIX}"* ]]; then
+            echo -e "${YELLOW}Nessun branch ${TASK_BRANCH_PREFIX} attivo dopo il tentativo ${attempt}.${NC}"
+            break
+        fi
+
+        # --- Code Reviewer: revisiona solo il diff del task rispetto a MAIN_BRANCH ---
+        git diff "${MAIN_BRANCH}...${CURRENT_BRANCH}" > "$TASK_DIFF_FILE" || true
+        echo -e "${CYAN}--> Invocazione Code Reviewer per ${TASK_ID}...${NC}"
+        echo "Leggi ${CONTEXT_REPORT} e il diff allegato ${TASK_DIFF_FILE} relativo esclusivamente al task ${TASK_ID}. Leggi il template allegato ${REVIEW_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e salva il report completo in ${TASK_REVIEW_REPORT}. Non modificare file del repository target o del framework AARP." | \
+            run_agent --model "$MODEL_REASONING" --file "${PROMPTS_DIR}/code-reviewer.md" --file "$REVIEW_TEMPLATE" --file "$TASK_DIFF_FILE"
+
+        if [[ ! -s "$TASK_REVIEW_REPORT" ]]; then
+            echo -e "${RED}Report di review mancante o vuoto per ${TASK_ID}; remediation sospesa.${NC}" >&2
+            break
+        fi
+        REVIEW_VERDICT="$(remediation_extract_verdict "$TASK_REVIEW_REPORT")"
+        echo -e "${CYAN}Verdetto review (tentativo ${attempt}): ${REVIEW_VERDICT:-N/D}${NC}"
+
+        if [[ "$REVIEW_VERDICT" == "BLOCKED" ]]; then
+            echo -e "${RED}Review BLOCCATA per ${TASK_ID} (regressione di sicurezza o scope violato): ${TASK_REVIEW_REPORT}${NC}"
+            break
+        fi
+        if [[ "$REVIEW_VERDICT" != "APPROVED" ]]; then
+            FEEDBACK_TEXT="$(cat "$TASK_REVIEW_REPORT")"
+            echo -e "${YELLOW}Review non approvata (${REVIEW_VERDICT:-N/D}); nuovo tentativo con il feedback della review.${NC}"
+            continue
+        fi
+
+        # --- QA / Test: esegue davvero la verifica prima di offrire il push manuale ---
+        echo -e "${CYAN}--> Invocazione QA/Test per ${TASK_ID}...${NC}"
+        echo "Leggi ${CONTEXT_REPORT} e verifica la fix del task ${TASK_ID} sul branch ${CURRENT_BRANCH} nel repository target, attualmente checked out. Leggi il template allegato ${TEST_TEMPLATE}, usalo come struttura obbligatoria, sostituisci i placeholder e salva il report completo in ${TASK_TEST_REPORT}. Non modificare file del framework AARP." | \
+            run_agent --model "$MODEL_GENERAL" --file "${PROMPTS_DIR}/qa-test.md" --file "$TEST_TEMPLATE"
+
+        if [[ ! -s "$TASK_TEST_REPORT" ]]; then
+            echo -e "${RED}Report di test mancante o vuoto per ${TASK_ID}; remediation sospesa.${NC}" >&2
+            break
+        fi
+        TEST_STATUS="$(remediation_extract_test_status "$TASK_TEST_REPORT")"
+        echo -e "${CYAN}Esito QA/Test (tentativo ${attempt}): ${TEST_STATUS:-N/D}${NC}"
+
+        if [[ "$TEST_STATUS" == "PASS" ]]; then
+            TASK_VERIFIED=true
+            break
+        elif [[ "$TEST_STATUS" == "BLOCKED" ]]; then
+            echo -e "${RED}QA/Test BLOCCATO per ${TASK_ID} (ambiente non verificabile): ${TASK_TEST_REPORT}${NC}"
+            break
+        else
+            FEEDBACK_TEXT="$(cat "$TASK_TEST_REPORT")"
+            echo -e "${YELLOW}Test falliti (${TEST_STATUS:-N/D}); nuovo tentativo con il feedback dei test.${NC}"
+            continue
+        fi
+    done
+
+    # L'agente deve rimanere sul prefisso coerente con la priorità confermata,
+    # e deve aver superato review (APPROVED) e test (PASS) entro i tentativi.
+    if [[ "$TASK_VERIFIED" == true && "$CURRENT_BRANCH" == "${TASK_BRANCH_PREFIX}"* ]]; then
+        echo -e "\n${GREEN}✓ Task ${TASK_ID} verificato (review APPROVED, test PASS) sul branch: ${CURRENT_BRANCH}${NC}"
 
         if ! read -r -p "Vuoi pubblicare '$CURRENT_BRANCH' per testarlo prima del merge? (s/N): " do_task_push; then
             do_task_push="n"
@@ -629,6 +976,12 @@ while true; do
             rm -f "$ROADMAP_BACKUP"
             echo -e "${GREEN}✓ Merge completato su $MAIN_BRANCH${NC}"
             echo -e "${GREEN}✓ ${TASK_ID} marcato come Merged in ${ROADMAP_REPORT}${NC}"
+            if [[ "$DOCUMENTATION_ENABLED" == true ]]; then
+                refresh_documentation_after_merge || {
+                    echo -e "${RED}Aggiornamento documentale post-merge non riuscito; nessun ulteriore task verrà eseguito.${NC}" >&2
+                    exit 1
+                }
+            fi
         else
             cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
             rm -f "$ROADMAP_BACKUP"
@@ -645,6 +998,7 @@ while true; do
     else
         cp "$ROADMAP_BACKUP" "$ROADMAP_REPORT"
         rm -f "$ROADMAP_BACKUP"
-        echo -e "${YELLOW}Nessun branch ${TASK_BRANCH_PREFIX} creato. Verificare la remediation di ${TASK_ID}; roadmap invariata.${NC}"
+        SKIPPED_TASK_IDS+=("$TASK_ID")
+        echo -e "${YELLOW}${TASK_ID} non verificato entro ${MAX_REMEDIATION_ATTEMPTS} tentativi (o intervento richiesto). Branch: ${CURRENT_BRANCH:-nessuno}. Report in ${REMEDIATION_DIR}. Task riproposto al prossimo avvio.${NC}"
     fi
 done
