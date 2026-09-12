@@ -39,19 +39,36 @@ OVERRIDES="$(
 [[ "$OVERRIDES" == "${CUSTOM_CONTEXT}"$'\n'"${CUSTOM_OUTPUT}" ]] ||
     fail "caller JSON overrides were modified"
 
-FAKE_BIN="$(mktemp -d)"
-trap 'rm -rf "$FAKE_BIN"' EXIT
+TEST_TMP="$(mktemp -d)"
+FAKE_BIN="${TEST_TMP}/bin"
+TEST_ENV="${TEST_TMP}/aarp.env"
+mkdir -p "$FAKE_BIN"
+trap 'rm -rf "$TEST_TMP"' EXIT
 cat > "${FAKE_BIN}/openclaude" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
 chmod +x "${FAKE_BIN}/openclaude"
 
+cat > "$TEST_ENV" <<'EOF'
+MODEL_DOCUMENTATION=env-file-documentation-model
+OPENROUTER_TIMEOUT=111
+EOF
+
 CHECK_OUTPUT="$(
-    PATH="${FAKE_BIN}:${PATH}" \
+    env -u OPENROUTER_TIMEOUT \
+        MODEL_DOCUMENTATION="exported-documentation-model" \
+        AARP_ENV_FILE="$TEST_ENV" \
+        PATH="${FAKE_BIN}:${PATH}" \
         bash "${PROJECT_DIR}/scripts/orchestrator.sh" --check
 )"
 [[ "$CHECK_OUTPUT" == *"Preflight completed."* ]] ||
     fail "orchestrator --check did not complete"
+[[ "$CHECK_OUTPUT" == *"Loaded AARP environment file: ${TEST_ENV}"* ]] ||
+    fail "orchestrator did not load AARP_ENV_FILE"
+[[ "$CHECK_OUTPUT" == *"Documentation: exported-documentation-model"* ]] ||
+    fail "exported model did not override the environment file"
+[[ "$CHECK_OUTPUT" == *"Timeout:       111s"* ]] ||
+    fail "environment-file timeout was not loaded"
 
 echo "runtime_config_test: PASS"

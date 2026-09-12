@@ -125,6 +125,7 @@ run_only_doc() {
     local mode="${4:-valid}"
 
     printf '%b' "$input" | \
+        AARP_ENV_FILE="/dev/null" \
         PATH="${FAKE_BIN}:${PATH}" \
         FAKE_OPENCLAUDE_LOG="$FAKE_LOG" \
         FAKE_DOCUMENTATION_MODE="$mode" \

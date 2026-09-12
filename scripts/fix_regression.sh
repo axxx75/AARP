@@ -2,6 +2,8 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${PROJECT_DIR}/scripts/env_loader.sh"
+aarp_load_env "$PROJECT_DIR"
 source "${PROJECT_DIR}/scripts/runtime_config.sh"
 source "${PROJECT_DIR}/scripts/preflight.sh"
 

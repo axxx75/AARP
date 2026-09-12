@@ -112,9 +112,13 @@ The default provider is:
 export OPENCLAUDE_PROVIDER="openrouter"
 ```
 
-Copy `.env.example` to `.env` to customize non-secret values. Provider
-credentials are intentionally excluded; configure authentication through
-OpenClaude and never commit credentials.
+Copy `.env.example` to `.env` to customize non-secret values. Both entrypoints
+load `${AARP checkout}/.env` automatically before applying shared defaults.
+Supported AARP configuration variables already exported by the caller take
+precedence over `.env`; `.env` takes precedence over
+`scripts/runtime_config.sh`. Set `AARP_ENV_FILE` to load a file from a
+different path. Provider credentials are intentionally excluded; configure
+authentication through OpenClaude and never commit credentials.
 
 Before starting a full audit, run the minimal preflight:
 

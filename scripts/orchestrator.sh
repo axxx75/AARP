@@ -14,6 +14,8 @@ NC='\033[0m'
 # CONFIGURATION & TARGET REPOSITORY
 # ------------------------------------------------------------------------------
 AARP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "${AARP_DIR}/scripts/env_loader.sh"
+aarp_load_env "$AARP_DIR"
 source "${AARP_DIR}/scripts/runtime_config.sh"
 source "${AARP_DIR}/scripts/preflight.sh"
 
@@ -282,11 +284,19 @@ run_mutating_agent() {
 
 run_documentation_agent() {
     local documentation_log="${LOGS_DIR}/documentation-agent.log"
+    local openclaude_status
 
+    echo "--> OpenClaude output log: ${documentation_log}"
+    printf '[%s] Starting Documentation Architect with model %s\n' \
+        "$(date -Iseconds)" "$MODEL_DOCUMENTATION" >> "$documentation_log"
     AARP_DOCUMENTATION_OUTPUT_DIR="$DOCUMENTATION_OUTPUT_DIR" TERM=dumb openclaude --print \
     --add-dir "$AUDIT_DIR" \
     --add-dir "$DOCUMENTATION_OUTPUT_DIR" \
     "$@" 2>&1 | tee -a "$documentation_log"
+    openclaude_status="${PIPESTATUS[0]}"
+    printf '[%s] Documentation Architect exited with status %s\n' \
+        "$(date -Iseconds)" "$openclaude_status" >> "$documentation_log"
+    return "$openclaude_status"
 }
 
 LOGS_DIR="${REVIEW_DIR}/logs"
