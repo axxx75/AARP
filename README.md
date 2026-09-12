@@ -74,8 +74,9 @@ ignored by Git.
 
 Before running AARP, install and configure:
 
-- Bash;
+- Bash 4 or newer;
 - Git;
+- `tar`;
 - the `openclaude` command-line tool;
 - an OpenRouter account and the credentials required by the OpenClaude
   provider configuration.
@@ -87,9 +88,10 @@ provider configuration containing secrets to the target repository.
 The scripts select models through optional environment variables:
 
 ```bash
-export MODEL_GENERAL="thinkingmachines/inkling:free"
-export MODEL_REASONING="cohere/north-mini-code:free"
+export MODEL_GENERAL="google/gemini-2.5-flash"
+export MODEL_REASONING="google/gemini-2.5-flash"
 export MODEL_DOCUMENTATION="google/gemini-2.5-flash"
+export MODEL_REGRESSION="cohere/north-mini-code:free"
 ```
 
 If they are not set, the values above are used by `orchestrator.sh`. The
@@ -99,19 +101,29 @@ which is useful when documenting an entire repository. Override the variable
 when a different supported model better matches the target's size or cost
 requirements.
 
-`fix_regression.sh` uses `cohere/north-mini-code:free` for reasoning by
-default. Both scripts also configure conservative temperature, timeout,
-retry, and telemetry-related settings internally.
+Shared defaults live in `scripts/runtime_config.sh`. Both entrypoints source
+that file, respect values already exported by the operator, and use the same
+context-window, output-token, temperature, timeout, retry, and telemetry
+settings.
 
-The regression helper explicitly sets:
+The default provider is:
 
 ```bash
 export OPENCLAUDE_PROVIDER="openrouter"
 ```
 
-The main orchestrator expects OpenClaude to already be configured for the
-chosen provider. Verify the provider setup in your environment before
-starting a full audit.
+Copy `.env.example` to `.env` to customize non-secret values. Provider
+credentials are intentionally excluded; configure authentication through
+OpenClaude and never commit credentials.
+
+Before starting a full audit, run the minimal preflight:
+
+```bash
+bash scripts/orchestrator.sh --check
+```
+
+It verifies only Bash 4+, Git, `tar`, and `openclaude`. It does not call a
+model or validate credentials, network access, or model availability.
 
 ## Recommended setup
 
@@ -156,6 +168,20 @@ bash scripts/orchestrator.sh \
   --target /path/to/repository-under-review \
   --only-doc
 ```
+
+## Local verification
+
+After the preflight succeeds, run the isolated Bash fixtures on your local
+infrastructure:
+
+```bash
+bash scripts/run_tests.sh
+```
+
+The runner executes runtime configuration, preflight, documentation helper,
+documentation orchestrator, report validation, and roadmap helper fixtures in
+sequence. The runtime and documentation orchestrator fixtures use a fake
+`openclaude` executable and do not call a provider.
 
 For a URL target, AARP clones the repository into its review workspace. For a
 local target, it leaves the original checkout where it is. For either target,
@@ -397,9 +423,10 @@ The current repository is an intentionally small foundation. In particular:
   target-aware;
 - there is no web interface, API, job queue, persistent run database, or
   hosted execution service;
-- the main orchestrator assumes that OpenClaude is installed and configured;
-- the orchestrator and regression helper contain model/provider defaults that
-  may need to be adjusted for the available OpenRouter models;
+- the preflight verifies the OpenClaude executable but leaves provider
+  authentication and model availability to OpenClaude;
+- model/provider defaults may need to be adjusted for the available OpenRouter
+  models;
 - generated reports are checkpoint files in the review directory, not
   versioned run records;
 - the current resume mechanism uses file existence and does not validate

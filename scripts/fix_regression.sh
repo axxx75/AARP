@@ -1,22 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ------------------------------------------------------------------------------
-# CONFIGURAZIONE AMBIENTE & PARAMETRI AVANZATI
-# ------------------------------------------------------------------------------
-export OPENCLAUDE_PROVIDER="openrouter"
-export CLAUDE_CODE_OPENAI_CONTEXT_WINDOWS='{"thinkingmachines/inkling:free": 262144, "cohere/north-mini-code:free": 256000}'
-export CLAUDE_CODE_OPENAI_MAX_OUTPUT_TOKENS='{"thinkingmachines/inkling:free": 8192, "cohere/north-mini-code:free": 4096}'
-
-export OPENAI_TEMPERATURE=0.2
-export OPENROUTER_TIMEOUT=300
-export OPENROUTER_MAX_RETRIES=3
-export NODE_NO_WARNINGS=1
-export DISABLE_TELEMETRY=1
-
-#MODEL_REASONING="${MODEL_REASONING:-google/gemini-2.5-flash}"
-MODEL_REASONING="${MODEL_REASONING:-cohere/north-mini-code:free}"
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "${PROJECT_DIR}/scripts/runtime_config.sh"
+source "${PROJECT_DIR}/scripts/preflight.sh"
+
+if ! aarp_preflight regression; then
+    exit 1
+fi
+
 LOGS_DIR="${PROJECT_DIR}/logs"
 
 mkdir -p "$LOGS_DIR"
@@ -75,7 +67,7 @@ EXTRA_FILES=()
 [ -f "${PROJECT_DIR}/ROADMAP.md" ]         && EXTRA_FILES+=(--file "${PROJECT_DIR}/ROADMAP.md")
 [ -f "$GIT_DIFF_FILE" ]                     && EXTRA_FILES+=(--file "$GIT_DIFF_FILE")
 
-echo "$PROMPT_TEXT" | openclaude --dangerously-skip-permissions --model "$MODEL_REASONING" "${EXTRA_FILES[@]}"
+echo "$PROMPT_TEXT" | openclaude --dangerously-skip-permissions --model "$MODEL_REGRESSION" "${EXTRA_FILES[@]}"
 
 echo -e "\n${GREEN}✓ Procedura di ripristino completata. Stato repository:${NC}"
 git status -s

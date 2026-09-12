@@ -14,13 +14,17 @@ NC='\033[0m'
 # CONFIGURATION & TARGET REPOSITORY
 # ------------------------------------------------------------------------------
 AARP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+source "${AARP_DIR}/scripts/runtime_config.sh"
+source "${AARP_DIR}/scripts/preflight.sh"
+
 TARGET_SPEC=""
 REVIEW_DIR_OVERRIDE=""
 ONLY_DOC=false
+CHECK_ONLY=false
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--branch BRANCH_NAME] [--review-dir PATH] [--only-doc]
+Usage: bash scripts/orchestrator.sh [--target PATH_OR_GIT_URL] [--branch BRANCH_NAME] [--review-dir PATH] [--only-doc] [--check]
 
 Review a local checkout or clone a Git repository without copying AARP into it.
 
@@ -29,6 +33,7 @@ Options:
   --branch BRANCH_NAME      Target base branch for remediation (e.g. main, release/v2.0.0).
   --review-dir PATH         Directory for the clone, reports, and logs.
   --only-doc                Generate or refresh human documentation only.
+  --check                   Validate the local runtime configuration and exit.
   -h, --help                Show this help.
 
 With no --target, the legacy in-place workflow is used and the repository
@@ -69,6 +74,10 @@ while (($# > 0)); do
             ONLY_DOC=true
             shift
             ;;
+        --check)
+            CHECK_ONLY=true
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -88,6 +97,13 @@ while (($# > 0)); do
             ;;
     esac
 done
+
+if ! aarp_preflight; then
+    exit 1
+fi
+if [[ "$CHECK_ONLY" == true ]]; then
+    exit 0
+fi
 
 is_remote_target() {
     local source="$1"
@@ -251,6 +267,13 @@ else
 fi
 
 run_agent() {
+    TERM=dumb openclaude --print \
+    --add-dir "$AARP_DIR" \
+    --add-dir "$REVIEW_DIR" \
+    "$@"
+}
+
+run_mutating_agent() {
     TERM=dumb openclaude --print --dangerously-skip-permissions \
     --add-dir "$AARP_DIR" \
     --add-dir "$REVIEW_DIR" \
@@ -297,51 +320,6 @@ DOCUMENTATION_OUTPUT_DIR="${REPORTS_DIR}/documentation"
 DOCUMENTATION_SOURCE_DIR=""
 DOCUMENTATION_TARGET_NAME="docs"
 DOCUMENTATION_ENABLED=false
-
-# ------------------------------------------------------------------------------
-# OPTIMIZATION & CONTEXT CONFIGURATION
-# ------------------------------------------------------------------------------
-
-# Inietta la mappatura esatta della context window per evitare fallback conservativi
-export CLAUDE_CODE_OPENAI_CONTEXT_WINDOWS='{
-  "thinkingmachines/inkling:free": 262144,
-  "cohere/north-mini-code:free": 256000,
-  "google/gemma-2-9b-it:free": 131072,
-  "qwen/qwen-2.5-coder-32b-instruct:free": 131072,
-  "anthropic/claude-3.5-sonnet": 200000,
-  "deepseek/deepseek-r1": 163840,
-  "google/gemini-2.5-flash": 1048576
-}'
-
-# Massimizza i token di output generabili per evitare troncatura dei report
-export CLAUDE_CODE_OPENAI_MAX_OUTPUT_TOKENS='{
-  "thinkingmachines/inkling:free": 8192,
-  "cohere/north-mini-code:free": 4096,
-  "anthropic/claude-3.5-sonnet": 8192,
-  "deepseek/deepseek-r1": 8192,
-  "google/gemini-2.5-flash": 8192
-}'
-
-# Parametri di stabilità e performance
-export OPENAI_TEMPERATURE=0.2
-export OPENROUTER_TIMEOUT=300
-export OPENROUTER_MAX_RETRIES=3
-export NODE_NO_WARNINGS=1
-export DISABLE_TELEMETRY=1
-export CLAUDE_CODE_DISABLE_BANNER=1
-
-#MODEL_GENERAL="${MODEL_GENERAL:-anthropic/claude-sonnet-5}"
-#MODEL_REASONING="${MODEL_REASONING:-deepseek/deepseek-v4-pro}"
-
-#MODEL_GENERAL="${MODEL_GENERAL:-anthropic/claude-3.5-sonnet}"
-#MODEL_REASONING="${MODEL_REASONING:-deepseek/deepseek-r1}"
-
-#MODEL_GENERAL="${MODEL_GENERAL:-thinkingmachines/inkling:free}"        # FreeModel but with limit
-#MODEL_REASONING="${MODEL_REASONING:-cohere/north-mini-code:free}"      # FreeModel but with limit
-MODEL_DOCUMENTATION="${MODEL_DOCUMENTATION:-google/gemini-2.5-flash}"
-
-MODEL_GENERAL="${MODEL_GENERAL:-google/gemini-2.5-flash}"
-MODEL_REASONING="${MODEL_REASONING:-google/gemini-2.5-flash}"
 
 # ------------------------------------------------------------------------------
 # DOCUMENTATION ARCHITECT HELPERS
@@ -871,7 +849,7 @@ while true; do
             DEV_FILES+=(--file "$TASK_FEEDBACK_FILE")
         fi
 
-        if ! echo "$DEV_PROMPT" | run_agent --model "$MODEL_GENERAL" --file "${PROMPTS_DIR}/developer.md" "${DEV_FILES[@]}"; then
+        if ! echo "$DEV_PROMPT" | run_mutating_agent --model "$MODEL_GENERAL" --file "${PROMPTS_DIR}/developer.md" "${DEV_FILES[@]}"; then
             echo -e "${RED}Errore durante la remediation di ${TASK_ID} (tentativo ${attempt}).${NC}" >&2
             break
         fi
